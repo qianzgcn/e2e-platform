@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  background: #f5f7fb;
+  color: #1f2937;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+.ant-layout {
+  min-height: 100vh;
+}
+
+.app-shell {
+  background: #f5f7fb;
+}
+
+.content-panel {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.code-editor {
+  height: 100% !important;
+  min-height: 0 !important;
+  resize: none !important;
+  border-color: #1e293b;
+  background: #0f172a;
+  color: #dbeafe;
+  font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.code-editor:hover,
+.code-editor:focus {
+  border-color: #2563eb;
+  background: #0f172a;
+  color: #dbeafe;
+  box-shadow: 0 0 0 2px rgb(37 99 235 / 20%);
+}
+
+.code-editor::placeholder {
+  color: #64748b;
+}
+
+.test-case-modal-grid {
+  height: min(620px, calc(100vh - 220px));
+}
+
+.test-case-modal-wide .ant-modal-content {
+  padding-inline: 16px;
+}
+
+.test-case-modal-wide .ant-modal-body {
+  width: 100%;
+}
+
+.test-case-modal-form,
+.test-case-modal-grid,
+.test-case-modal-grid .ant-col,
+.test-case-modal-wide .ant-form-item,
+.test-case-modal-wide .ant-form-item-row,
+.test-case-modal-wide .ant-form-item-control,
+.test-case-modal-wide .ant-form-item-control-input,
+.test-case-modal-wide .ant-form-item-control-input-content {
+  width: 100%;
+}
+
+.test-case-modal-column,
+.test-case-script-column {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+}
+
+.test-case-steps-item,
+.test-case-script-item {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.test-case-steps-item .ant-form-item-row,
+.test-case-steps-item .ant-form-item-control,
+.test-case-steps-item .ant-form-item-control-input,
+.test-case-steps-item .ant-form-item-control-input-content,
+.test-case-script-item .ant-form-item-row,
+.test-case-script-item .ant-form-item-control,
+.test-case-script-item .ant-form-item-control-input,
+.test-case-script-item .ant-form-item-control-input-content {
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+}
+
+.test-case-steps-editor {
+  width: 100% !important;
+  min-height: 0 !important;
+  flex: 1;
+  resize: none !important;
+}
+
+.code-editor {
+  width: 100% !important;
+}

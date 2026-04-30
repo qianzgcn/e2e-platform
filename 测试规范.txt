@@ -1,0 +1,7 @@
+1. 必须使用 @playwright/test
+2. 优先使用 getByRole、getByText、getByTestId
+3. 禁止使用 waitForTimeout，除非特殊说明
+4. 每个测试必须有明确 expect
+5. 登录逻辑统一走 fixture 或 storageState
+6. 不允许写死不稳定的 CSS selector
+7. 所有测试文件必须输出到指定目录

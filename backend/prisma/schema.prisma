@@ -1,0 +1,72 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum TestCaseStatus {
+  not_run
+  queued
+  generating
+  running
+  success
+  failed
+}
+
+enum RunLogStatus {
+  queued
+  generating
+  running
+  success
+  failed
+}
+
+model Project {
+  id        Int      @id @default(autoincrement())
+  name      String
+  baseUrl   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TestCaseGroup {
+  id        Int        @id @default(autoincrement())
+  name      String     @unique
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  testCases TestCase[]
+}
+
+model TestCase {
+  id                String         @id
+  title             String
+  groupId           Int
+  group             TestCaseGroup  @relation(fields: [groupId], references: [id])
+  naturalLanguage   String         @db.Text
+  playwrightScript  String?        @db.LongText
+  status            TestCaseStatus @default(not_run)
+  lastFailureReason String?        @db.Text
+  lastRunAt         DateTime?
+  createdAt         DateTime       @default(now())
+  editedAt          DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  runLogs           RunLog[]
+
+  @@index([groupId])
+}
+
+model RunLog {
+  id            Int          @id @default(autoincrement())
+  testCaseId    String
+  testCase      TestCase     @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
+  status        RunLogStatus
+  failureReason String?      @db.Text
+  stdout        String?      @db.LongText
+  stderr        String?      @db.LongText
+  startedAt     DateTime     @default(now())
+  finishedAt    DateTime?
+
+  @@index([testCaseId])
+}
