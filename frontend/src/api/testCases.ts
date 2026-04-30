@@ -38,3 +38,13 @@ export function runTestCase(id: string) {
     method: "POST",
   });
 }
+
+export function deleteTestCases(ids: string[]) {
+  return deleteTestCase(ids.join(","));
+}
+
+export function runTestCases(ids: string[]) {
+  return request<{ runIds: number[] }>(`/test-cases/${ids.join(",")}/run`, {
+    method: "POST",
+  });
+}

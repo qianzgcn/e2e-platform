@@ -1,21 +1,14 @@
 import { DashboardOutlined, ProjectOutlined, SettingOutlined } from "@ant-design/icons";
 import { ConfigProvider, Layout, Menu, Typography } from "antd";
-import type { ReactNode } from "react";
-import { useState } from "react";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ProjectSettingsPage } from "./pages/ProjectSettingsPage";
 import { TestCasePage } from "./pages/TestCasePage";
 
-type PageKey = "dashboard" | "testCases" | "settings";
-
-const pageMap: Record<PageKey, ReactNode> = {
-  dashboard: <DashboardPage />,
-  testCases: <TestCasePage />,
-  settings: <ProjectSettingsPage />,
-};
-
 export default function App() {
-  const [page, setPage] = useState<PageKey>("dashboard");
+  const location = useLocation();
+  const navigate = useNavigate();
+  const selectedKey = location.pathname === "/" ? "/dashboard" : location.pathname;
 
   return (
     <ConfigProvider
@@ -38,17 +31,24 @@ export default function App() {
           </div>
           <Menu
             mode="inline"
-            selectedKeys={[page]}
-            onClick={({ key }) => setPage(key as PageKey)}
+            selectedKeys={[selectedKey]}
+            onClick={({ key }) => navigate(key)}
             items={[
-              { key: "dashboard", icon: <DashboardOutlined />, label: "看板" },
-              { key: "testCases", icon: <ProjectOutlined />, label: "用例管理" },
-              { key: "settings", icon: <SettingOutlined />, label: "配置" },
+              { key: "/dashboard", icon: <DashboardOutlined />, label: "看板" },
+              { key: "/test-cases", icon: <ProjectOutlined />, label: "用例管理" },
+              { key: "/settings", icon: <SettingOutlined />, label: "配置" },
             ]}
           />
         </Layout.Sider>
         <Layout>
-          <Layout.Content className="px-8 py-7">{pageMap[page]}</Layout.Content>
+          <Layout.Content className="px-8 py-7">
+            <Routes>
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/test-cases" element={<TestCasePage />} />
+              <Route path="/settings" element={<ProjectSettingsPage />} />
+            </Routes>
+          </Layout.Content>
         </Layout>
       </Layout>
     </ConfigProvider>

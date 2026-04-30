@@ -148,17 +148,21 @@ testCasesRouter.put("/:id", async (req, res) => {
 });
 
 testCasesRouter.delete("/:id", async (req, res) => {
-  const id = req.params.id;
-  await prisma.testCase.delete({ where: { id } });
+  const ids = parseIds(req.params.id);
+  await prisma.testCase.deleteMany({ where: { id: { in: ids } } });
   res.status(204).send();
 });
 
 testCasesRouter.post("/:id/run", async (req, res) => {
-  const id = req.params.id;
+  const ids = parseIds(req.params.id);
   try {
-    const result = await runTestCase(id);
-    res.json(result);
+    const results = await Promise.all(ids.map((id) => runTestCase(id)));
+    res.json(ids.length === 1 ? results[0] : { runIds: results.map((result) => result.runId) });
   } catch (error) {
     res.status(404).json({ message: error instanceof Error ? error.message : "用例不存在" });
   }
 });
+
+function parseIds(value: string) {
+  return value.split(",").filter(Boolean);
+}

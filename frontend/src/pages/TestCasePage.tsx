@@ -5,10 +5,12 @@ import { createTestCaseGroup, fetchTestCaseGroups } from "../api/testCaseGroups"
 import {
   createTestCase,
   deleteTestCase,
+  deleteTestCases,
   fetchLatestRun,
   fetchTestCase,
   fetchTestCases,
   runTestCase,
+  runTestCases,
   updateTestCase,
 } from "../api/testCases";
 import { isBusyStatus, StatusTag } from "../components/StatusTag";
@@ -22,6 +24,7 @@ export function TestCasePage() {
   const [groups, setGroups] = useState<TestCaseGroup[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCase, setEditingCase] = useState<TestCaseDetail | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [runLogItem, setRunLogItem] = useState<TestCaseListItem | null>(null);
   const [runDetail, setRunDetail] = useState<LatestRunDetail | null>(null);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
@@ -35,6 +38,7 @@ export function TestCasePage() {
       const [testCases, testCaseGroups] = await Promise.all([fetchTestCases(), fetchTestCaseGroups()]);
       setItems(testCases);
       setGroups(testCaseGroups);
+      setSelectedRowKeys((current) => current.filter((id) => testCases.some((item) => item.id === id)));
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "加载用例失败");
     } finally {
@@ -129,6 +133,40 @@ export function TestCasePage() {
     });
   }
 
+  async function handleBatchRun() {
+    if (!selectedRowKeys.length) {
+      return;
+    }
+
+    try {
+      await runTestCases(selectedRowKeys);
+      messageApi.success("已加入运行队列");
+      setSelectedRowKeys([]);
+      await loadData();
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "批量运行失败");
+    }
+  }
+
+  async function handleBatchDelete() {
+    if (!selectedRowKeys.length) {
+      return;
+    }
+
+    Modal.confirm({
+      title: "批量删除用例",
+      content: `确认删除选中的 ${selectedRowKeys.length} 条用例吗？`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      async onOk() {
+        await deleteTestCases(selectedRowKeys);
+        setSelectedRowKeys([]);
+        await loadData();
+      },
+    });
+  }
+
   async function showRunLog(item: TestCaseListItem) {
     setRunLogItem(item);
     setRunDetail(null);
@@ -162,11 +200,38 @@ export function TestCasePage() {
       </div>
 
       <div className="content-panel p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <Typography.Text type="secondary">已选择 {selectedRowKeys.length} 条</Typography.Text>
+          <Space>
+            <Button
+              icon={<PlayCircleOutlined />}
+              disabled={!selectedRowKeys.length}
+              onClick={() => void handleBatchRun()}
+            >
+              批量运行
+            </Button>
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={!selectedRowKeys.length}
+              onClick={() => void handleBatchDelete()}
+            >
+              批量删除
+            </Button>
+          </Space>
+        </div>
         <Table<TestCaseListItem>
           rowKey="id"
           loading={loading}
           dataSource={items}
           pagination={{ pageSize: 8 }}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys) => setSelectedRowKeys(keys.map(String)),
+            getCheckboxProps: (record) => ({
+              disabled: isBusyStatus(record.status),
+            }),
+          }}
           columns={[
             {
               title: "用例名称",

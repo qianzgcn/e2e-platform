@@ -15,8 +15,9 @@ type Props = {
 
 export function TestCaseModal({ open, loading, initialValue, groups, onCancel, onSubmit, onCreateGroup }: Props) {
   const [form] = Form.useForm<TestCasePayload>();
-  const [groupName, setGroupName] = useState("");
+  const [groupForm] = Form.useForm<{ name: string }>();
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [showScript, setShowScript] = useState(false);
   const isEdit = Boolean(initialValue);
 
@@ -26,7 +27,7 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
     }
 
     setShowScript(false);
-    setGroupName("");
+    setGroupModalOpen(false);
     form.resetFields();
     form.setFieldsValue({
       title: initialValue?.title ?? "",
@@ -42,15 +43,14 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
   }
 
   async function handleCreateGroup() {
-    if (!groupName) {
-      return;
-    }
+    const values = await groupForm.validateFields();
 
     setCreatingGroup(true);
     try {
-      const group = await onCreateGroup(groupName);
+      const group = await onCreateGroup(values.name);
       form.setFieldValue("groupId", group.id);
-      setGroupName("");
+      setGroupModalOpen(false);
+      groupForm.resetFields();
     } catch {
       return;
     } finally {
@@ -85,23 +85,23 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
               <Input placeholder="例如：登录成功后进入控制台" />
             </Form.Item>
 
-            <Form.Item name="groupId" label="分组" rules={[{ required: true, message: "请选择分组" }]}>
+            <Form.Item
+              name="groupId"
+              label={
+                <span className="flex w-full items-center justify-between">
+                  <span>分组</span>
+                  <Button type="link" size="small" className="!h-auto !p-0" onClick={() => setGroupModalOpen(true)}>
+                    新建分组
+                  </Button>
+                </span>
+              }
+              rules={[{ required: true, message: "请选择分组" }]}
+            >
               <Select
                 placeholder="请选择分组"
                 options={groups.map((group) => ({ label: group.name, value: group.id }))}
               />
             </Form.Item>
-
-            <Space.Compact className="mb-6 w-full">
-              <Input
-                value={groupName}
-                onChange={(event) => setGroupName(event.target.value)}
-                placeholder="新建分组，例如：登录模块"
-              />
-              <Button loading={creatingGroup} onClick={() => void handleCreateGroup()}>
-                新建分组
-              </Button>
-            </Space.Compact>
 
             <Form.Item
               name="naturalLanguage"
@@ -136,6 +136,21 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
           ) : null}
         </Row>
       </Form>
+
+      <Modal
+        title="新建分组"
+        open={groupModalOpen}
+        onCancel={() => setGroupModalOpen(false)}
+        onOk={() => void handleCreateGroup()}
+        confirmLoading={creatingGroup}
+        destroyOnClose
+      >
+        <Form form={groupForm} layout="vertical" className="mt-4">
+          <Form.Item name="name" label="分组名称" rules={[{ required: true, message: "请输入分组名称" }]}>
+            <Input placeholder="例如：登录模块" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </Modal>
   );
 }
