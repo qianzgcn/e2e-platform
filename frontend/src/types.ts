@@ -10,6 +10,7 @@ export type TestCaseListItem = {
   status: TestCaseStatus;
   lastFailureReason?: string | null;
   lastRunAt?: string | null;
+  createdAt?: string | null;
   editedAt?: string | null;
 };
 

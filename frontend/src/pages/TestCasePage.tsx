@@ -1,5 +1,6 @@
-import { DeleteOutlined, PlayCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { Button, Descriptions, Empty, Modal, Space, Table, Tabs, Tooltip, Typography, message } from "antd";
+import { DeleteOutlined, FileTextOutlined, PlayCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import { Button, Descriptions, Empty, Input, Modal, Space, Table, Tabs, Tooltip, Typography, message } from "antd";
+import type { ColumnType } from "antd/es/table";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createTestCaseGroup, fetchTestCaseGroups } from "../api/testCaseGroups";
 import {
@@ -22,6 +23,7 @@ export function TestCasePage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [groups, setGroups] = useState<TestCaseGroup[]>([]);
+  const [titleKeyword, setTitleKeyword] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCase, setEditingCase] = useState<TestCaseDetail | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
@@ -31,11 +33,12 @@ export function TestCasePage() {
   const [messageApi, contextHolder] = message.useMessage();
 
   const hasBusyCase = useMemo(() => items.some((item) => isBusyStatus(item.status)), [items]);
+  const groupFilters = useMemo(() => toFilters(items.map((item) => item.groupName)), [items]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [testCases, testCaseGroups] = await Promise.all([fetchTestCases(), fetchTestCaseGroups()]);
+      const [testCases, testCaseGroups] = await Promise.all([fetchTestCases(titleKeyword), fetchTestCaseGroups()]);
       setItems(testCases);
       setGroups(testCaseGroups);
       setSelectedRowKeys((current) => current.filter((id) => testCases.some((item) => item.id === id)));
@@ -44,7 +47,7 @@ export function TestCasePage() {
     } finally {
       setLoading(false);
     }
-  }, [messageApi]);
+  }, [messageApi, titleKeyword]);
 
   useEffect(() => {
     void loadData();
@@ -201,7 +204,15 @@ export function TestCasePage() {
 
       <div className="content-panel p-4">
         <div className="mb-3 flex items-center justify-between">
-          <Typography.Text type="secondary">已选择 {selectedRowKeys.length} 条</Typography.Text>
+          <Space>
+            <Input.Search
+              allowClear
+              placeholder="输入用例名称搜索"
+              className="w-72"
+              onSearch={(value: string) => setTitleKeyword(value.trim())}
+            />
+            <Typography.Text type="secondary">已选择 {selectedRowKeys.length} 条</Typography.Text>
+          </Space>
           <Space>
             <Button
               icon={<PlayCircleOutlined />}
@@ -236,26 +247,38 @@ export function TestCasePage() {
             {
               title: "用例名称",
               dataIndex: "title",
+              width: 220,
+              ellipsis: true,
               render: (title: string, record) => (
-                <Button type="link" className="!px-0" onClick={() => void openEditModal(record.id)}>
-                  {title}
-                </Button>
+                <Tooltip title={title}>
+                  <Button type="link" className="!max-w-full !px-0" onClick={() => void openEditModal(record.id)}>
+                    <span className="block truncate">{title}</span>
+                  </Button>
+                </Tooltip>
               ),
             },
-            { title: "分组", dataIndex: "groupName", width: 180 },
+            {
+              title: "分组",
+              dataIndex: "groupName",
+              width: 120,
+              filters: groupFilters,
+              onFilter: (value, record) => record.groupName === value,
+            },
             {
               title: "运行日志",
-              width: 120,
+              width: 88,
               render: (_, record) => (
-                <Button type="link" className="!px-0" onClick={() => void showRunLog(record)}>
-                  查看
-                </Button>
+                <Tooltip title="查看运行日志">
+                  <Button icon={<FileTextOutlined />} onClick={() => void showRunLog(record)} />
+                </Tooltip>
               ),
             },
             {
               title: "状态",
               dataIndex: "status",
               width: 160,
+              filters: statusFilters,
+              onFilter: (value, record) => record.status === value,
               render: (_, record) =>
                 record.status === "failed" && record.lastFailureReason ? (
                   <Tooltip title={record.lastFailureReason}>
@@ -268,29 +291,43 @@ export function TestCasePage() {
                 ),
             },
             {
+              title: "最近运行时间",
+              dataIndex: "lastRunAt",
+              width: 160,
+              render: (value: string | null) => formatDateTime(value),
+            },
+            {
+              title: "最后更新时间",
+              dataIndex: "editedAt",
+              width: 160,
+              render: (value: string | null) => formatDateTime(value),
+            },
+            {
               title: "操作",
-              width: 180,
+              width: 104,
+              fixed: "right",
               render: (_, record) => (
                 <Space>
-                  <Button
-                    icon={<PlayCircleOutlined />}
-                    disabled={isBusyStatus(record.status)}
-                    onClick={() => void handleRun(record)}
-                  >
-                    运行
-                  </Button>
-                  <Button
-                    danger
-                    icon={<DeleteOutlined />}
-                    disabled={isBusyStatus(record.status)}
-                    onClick={() => void handleDelete(record)}
-                  >
-                    删除
-                  </Button>
+                  <Tooltip title="运行">
+                    <Button
+                      icon={<PlayCircleOutlined />}
+                      disabled={isBusyStatus(record.status)}
+                      onClick={() => void handleRun(record)}
+                    />
+                  </Tooltip>
+                  <Tooltip title="删除">
+                    <Button
+                      danger
+                      icon={<DeleteOutlined />}
+                      disabled={isBusyStatus(record.status)}
+                      onClick={() => void handleDelete(record)}
+                    />
+                  </Tooltip>
                 </Space>
               ),
             },
           ]}
+          scroll={{ x: "max-content" }}
         />
       </div>
 
@@ -383,4 +420,17 @@ function LogBlock({ title, value }: { title: string; value?: string | null }) {
 
 function toApiUrl(url: string) {
   return url.startsWith("http") ? url : `http://localhost:3001${url}`;
+}
+
+const statusFilters: ColumnType<TestCaseListItem>["filters"] = [
+  { text: "未运行", value: "not_run" },
+  { text: "排队中", value: "queued" },
+  { text: "用例生成中", value: "generating" },
+  { text: "运行中", value: "running" },
+  { text: "成功", value: "success" },
+  { text: "失败", value: "failed" },
+];
+
+function toFilters(values: string[]) {
+  return Array.from(new Set(values)).map((value) => ({ text: value, value }));
 }

@@ -1,8 +1,9 @@
 import { request } from "./client";
 import type { LatestRunDetail, TestCaseDetail, TestCaseListItem, TestCasePayload } from "../types";
 
-export function fetchTestCases() {
-  return request<TestCaseListItem[]>("/test-cases");
+export function fetchTestCases(title?: string) {
+  const query = title ? `?title=${encodeURIComponent(title)}` : "";
+  return request<TestCaseListItem[]>(`/test-cases${query}`);
 }
 
 export function fetchTestCase(id: string) {

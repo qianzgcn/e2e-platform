@@ -16,11 +16,20 @@ type TestCaseListRow = {
   status: string;
   lastFailureReason: string | null;
   lastRunAt: Date | null;
+  createdAt: Date;
   editedAt: Date;
 };
 
 testCasesRouter.get("/", async (_req, res) => {
+  const title = typeof _req.query.title === "string" ? _req.query.title.trim() : "";
   const testCases = await prisma.testCase.findMany({
+    where: title
+      ? {
+          title: {
+            contains: title,
+          },
+        }
+      : undefined,
     orderBy: { editedAt: "desc" },
     select: {
       id: true,
@@ -34,6 +43,7 @@ testCasesRouter.get("/", async (_req, res) => {
       status: true,
       lastFailureReason: true,
       lastRunAt: true,
+      createdAt: true,
       editedAt: true,
     },
   });
@@ -47,6 +57,7 @@ testCasesRouter.get("/", async (_req, res) => {
       status: testCase.status,
       lastFailureReason: testCase.lastFailureReason,
       lastRunAt: testCase.lastRunAt,
+      createdAt: testCase.createdAt,
       editedAt: testCase.editedAt,
     })),
   );
