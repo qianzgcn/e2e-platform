@@ -1,6 +1,8 @@
 import { access, readdir } from "node:fs/promises";
 import path from "node:path";
 
+const TEST_RESULTS_ROOT = path.resolve(process.cwd(), "test-results");
+
 export type ArtifactItem = {
   name: string;
   type: "video" | "report" | "other";
@@ -8,7 +10,8 @@ export type ArtifactItem = {
 };
 
 export async function getLatestArtifacts(testCaseId: string) {
-  const rootDir = path.resolve(process.cwd(), "test-results", testCaseId);
+  // 运行产物不入库；接口每次都从该用例的最新 test-results 目录读取。
+  const rootDir = path.join(TEST_RESULTS_ROOT, testCaseId);
   const reportPath = path.join(rootDir, "html-report", "index.html");
 
   const [reportExists, artifacts] = await Promise.all([
@@ -23,6 +26,7 @@ export async function getLatestArtifacts(testCaseId: string) {
 }
 
 async function scanArtifacts(rootDir: string, currentDir: string): Promise<ArtifactItem[]> {
+  // 用例未运行过时目录不存在，前端展示“暂无运行日志”即可。
   if (!(await exists(currentDir))) {
     return [];
   }
@@ -68,6 +72,6 @@ function getArtifactType(filePath: string): ArtifactItem["type"] {
 }
 
 function toArtifactUrl(filePath: string) {
-  const relativePath = path.relative(path.resolve(process.cwd(), "test-results"), filePath).replaceAll(path.sep, "/");
+  const relativePath = path.relative(TEST_RESULTS_ROOT, filePath).replaceAll(path.sep, "/");
   return `/test-results/${relativePath}`;
 }

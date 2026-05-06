@@ -13,6 +13,8 @@ export async function runTestCase(testCaseId: string) {
   }
 
   const now = new Date();
+
+  // 用户点击运行后立即落库，前端可以马上看到“排队中”的运行记录。
   const runLog = await prisma.runLog.create({
     data: {
       testCaseId,
@@ -30,6 +32,7 @@ export async function runTestCase(testCaseId: string) {
     },
   });
 
+  // 后台异步执行，接口只返回 runId，不阻塞用户等待 Playwright 跑完。
   void processRun(testCaseId, runLog.id, testCase.status, testCase.playwrightScript);
 
   return { runId: runLog.id };
@@ -44,8 +47,10 @@ async function processRun(
   try {
     const project = await getProject();
     let script = existingScript;
+    const shouldRegenerateScript = previousStatus !== "success" || !script;
 
-    if (previousStatus !== "success" || !script) {
+    // 上次成功且已有脚本时直接复用脚本；失败、未运行或脚本为空时重新生成。
+    if (shouldRegenerateScript) {
       await updateStatus(runLogId, testCaseId, "generating");
       const latestTestCase = await prisma.testCase.findUniqueOrThrow({ where: { id: testCaseId } });
       script = await generateScript(latestTestCase);
@@ -57,7 +62,10 @@ async function processRun(
 
     await updateStatus(runLogId, testCaseId, "running");
     const latestTestCase = await prisma.testCase.findUniqueOrThrow({ where: { id: testCaseId } });
-    const result = await runPlaywright(script, project.baseUrl, latestTestCase.title, latestTestCase.id);
+    const runnableScript = script!;
+
+    // runPlaywright 通过 Playwright 命令退出码返回 success，服务层只负责落最终状态。
+    const result = await runPlaywright(runnableScript, project.baseUrl, latestTestCase.title, latestTestCase.id);
 
     if (result.success) {
       await markFinished(runLogId, testCaseId, "success", result.stdout, result.stderr);
@@ -72,6 +80,7 @@ async function processRun(
 }
 
 async function getProject() {
+  // MVP 只有一个项目配置；没有配置时自动创建默认项目，避免首次运行阻塞。
   return (
     (await prisma.project.findFirst({ orderBy: { id: "asc" } })) ??
     (await prisma.project.create({
@@ -84,6 +93,7 @@ async function getProject() {
 }
 
 async function updateStatus(runLogId: number, testCaseId: string, status: SharedRunningStatus) {
+  // 运行日志和用例状态保持同步，列表页可以直接读取 TestCase.status。
   await Promise.all([
     prisma.runLog.update({ where: { id: runLogId }, data: { status } }),
     prisma.testCase.update({ where: { id: testCaseId }, data: { status } }),
@@ -100,6 +110,7 @@ async function markFinished(
 ) {
   const finishedAt = new Date();
 
+  // 结束时写入 stdout/stderr，失败原因同步到用例表用于列表快速展示。
   await Promise.all([
     prisma.runLog.update({
       where: { id: runLogId },
