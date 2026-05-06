@@ -3,21 +3,31 @@ import { prisma } from "../prisma.js";
 
 export const projectRouter = Router();
 
-const defaultProject = {
-  name: "默认项目",
-  baseUrl: "http://localhost:5173",
+const projectInclude = {
+  variables: {
+    orderBy: {
+      id: "asc",
+    },
+  },
+} as const;
+
+type ProjectVariableInput = {
+  name: string;
+  value: string;
 };
 
 projectRouter.get("/", async (_req, res) => {
-  const project =
-    (await prisma.project.findFirst({ orderBy: { id: "asc" } })) ??
-    (await prisma.project.create({ data: defaultProject }));
+  const project = await prisma.project.findFirst({ orderBy: { id: "asc" }, include: projectInclude });
 
   res.json(project);
 });
 
 projectRouter.put("/", async (req, res) => {
   const { name, baseUrl } = req.body;
+  const variables = ((req.body.variables ?? []) as ProjectVariableInput[]).map((variable) => ({
+    name: variable.name.trim(),
+    value: variable.value,
+  }));
 
   if (!name || !baseUrl) {
     res.status(400).json({ message: "项目名称和 baseUrl 必填" });
@@ -28,10 +38,26 @@ projectRouter.put("/", async (req, res) => {
   const project = existing
     ? await prisma.project.update({
         where: { id: existing.id },
-        data: { name, baseUrl },
+        data: {
+          name,
+          baseUrl,
+          variables: {
+            deleteMany: {},
+            create: variables,
+          },
+        },
+        include: projectInclude,
       })
-    : await prisma.project.create({ data: { name, baseUrl } });
+    : await prisma.project.create({
+        data: {
+          name,
+          baseUrl,
+          variables: {
+            create: variables,
+          },
+        },
+        include: projectInclude,
+      });
 
   res.json(project);
 });
-

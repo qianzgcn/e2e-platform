@@ -20,6 +20,11 @@ type TestCaseListRow = {
   editedAt: Date;
 };
 
+type ExistingScriptTestCase = {
+  playwrightScript: string | null;
+  scriptGeneratedAt: Date | null;
+};
+
 testCasesRouter.get("/", async (_req, res) => {
   const title = typeof _req.query.title === "string" ? _req.query.title.trim() : "";
   const testCases = await prisma.testCase.findMany({
@@ -107,6 +112,7 @@ testCasesRouter.get("/:id/latest-run", async (req, res) => {
 
 testCasesRouter.post("/", async (req, res) => {
   const { title, groupId, naturalLanguage, playwrightScript } = req.body;
+  const script = getSavedScript(playwrightScript);
 
   if (!title || !groupId || !naturalLanguage) {
     res.status(400).json({ message: "标题、分组和测试步骤必填" });
@@ -119,7 +125,8 @@ testCasesRouter.post("/", async (req, res) => {
       title,
       groupId,
       naturalLanguage,
-      playwrightScript,
+      playwrightScript: script,
+      scriptGeneratedAt: script ? new Date() : null,
       editedAt: new Date(),
     },
     include: { group: true },
@@ -134,19 +141,34 @@ testCasesRouter.post("/", async (req, res) => {
 testCasesRouter.put("/:id", async (req, res) => {
   const id = req.params.id;
   const { title, groupId, naturalLanguage, playwrightScript } = req.body;
+  const script = getSavedScript(playwrightScript);
 
   if (!title || !groupId || !naturalLanguage) {
     res.status(400).json({ message: "标题、分组和测试步骤必填" });
     return;
   }
 
+  const existing = (await prisma.testCase.findUnique({
+    where: { id },
+    select: {
+      playwrightScript: true,
+      scriptGeneratedAt: true,
+    },
+  })) as ExistingScriptTestCase | null;
+  if (!existing) {
+    res.status(404).json({ message: "用例不存在" });
+    return;
+  }
+
+  const scriptChanged = script !== existing.playwrightScript;
   const testCase = await prisma.testCase.update({
     where: { id },
     data: {
       title,
       groupId,
       naturalLanguage,
-      playwrightScript,
+      playwrightScript: script,
+      scriptGeneratedAt: scriptChanged ? (script ? new Date() : null) : existing.scriptGeneratedAt,
       editedAt: new Date(),
     },
     include: { group: true },
@@ -176,4 +198,12 @@ testCasesRouter.post("/:id/run", async (req, res) => {
 
 function parseIds(value: string) {
   return value.split(",").filter(Boolean);
+}
+
+function getSavedScript(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  return value;
 }

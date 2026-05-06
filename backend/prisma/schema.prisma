@@ -29,6 +29,20 @@ model Project {
   baseUrl   String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  variables ProjectVariable[]
+}
+
+model ProjectVariable {
+  id        Int      @id @default(autoincrement())
+  projectId Int
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  value     String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, name])
+  @@index([projectId])
 }
 
 model TestCaseGroup {
@@ -49,6 +63,7 @@ model TestCase {
   status            TestCaseStatus @default(not_run)
   lastFailureReason String?        @db.Text
   lastRunAt         DateTime?
+  scriptGeneratedAt DateTime?
   createdAt         DateTime       @default(now())
   editedAt          DateTime       @default(now())
   updatedAt         DateTime       @updatedAt

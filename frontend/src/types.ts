@@ -48,6 +48,15 @@ export type ProjectConfig = {
   id: number;
   name: string;
   baseUrl: string;
+  variables: ProjectVariable[];
+};
+
+export type ProjectVariable = {
+  id?: number;
+  name: string;
+  value: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type RunLog = {

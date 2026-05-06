@@ -31,6 +31,7 @@ export function TestCasePage() {
   const [runDetail, setRunDetail] = useState<LatestRunDetail | null>(null);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
+  const [modal, modalContextHolder] = Modal.useModal();
 
   const hasBusyCase = useMemo(() => items.some((item) => isBusyStatus(item.status)), [items]);
   const groupFilters = useMemo(() => toFilters(items.map((item) => item.groupName)), [items]);
@@ -123,15 +124,21 @@ export function TestCasePage() {
   }
 
   async function handleDelete(item: TestCaseListItem) {
-    Modal.confirm({
+    modal.confirm({
       title: "删除用例",
       content: `确认删除「${item.title}」吗？`,
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
       async onOk() {
-        await deleteTestCase(item.id);
-        await loadData();
+        try {
+          await deleteTestCase(item.id);
+          await loadData();
+          messageApi.success("用例已删除");
+        } catch (error) {
+          messageApi.error(error instanceof Error ? error.message : "删除用例失败");
+          throw error;
+        }
       },
     });
   }
@@ -156,16 +163,22 @@ export function TestCasePage() {
       return;
     }
 
-    Modal.confirm({
+    modal.confirm({
       title: "批量删除用例",
       content: `确认删除选中的 ${selectedRowKeys.length} 条用例吗？`,
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
       async onOk() {
-        await deleteTestCases(selectedRowKeys);
-        setSelectedRowKeys([]);
-        await loadData();
+        try {
+          await deleteTestCases(selectedRowKeys);
+          setSelectedRowKeys([]);
+          await loadData();
+          messageApi.success("用例已删除");
+        } catch (error) {
+          messageApi.error(error instanceof Error ? error.message : "批量删除失败");
+          throw error;
+        }
       },
     });
   }
@@ -190,6 +203,7 @@ export function TestCasePage() {
   return (
     <div className="space-y-5">
       {contextHolder}
+      {modalContextHolder}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <Typography.Title level={3} className="!mb-1">

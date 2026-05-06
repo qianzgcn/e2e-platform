@@ -76,7 +76,7 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
             }
           : undefined,
       }}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form layout="vertical" form={form} className={showScript ? "test-case-modal-form mt-4" : "mt-4"}>
         <Row gutter={16} className={showScript ? "test-case-modal-grid" : ""}>
@@ -143,7 +143,7 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
         onCancel={() => setGroupModalOpen(false)}
         onOk={() => void handleCreateGroup()}
         confirmLoading={creatingGroup}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={groupForm} layout="vertical" className="mt-4">
           <Form.Item name="name" label="分组名称" rules={[{ required: true, message: "请输入分组名称" }]}>

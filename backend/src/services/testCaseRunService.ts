@@ -5,8 +5,35 @@ import { runPlaywright } from "./runnerService.js";
 type TestCaseStatus = "not_run" | "queued" | "generating" | "running" | "success" | "failed";
 type SharedRunningStatus = "queued" | "generating" | "running" | "success" | "failed";
 
+type ProjectConfig = {
+  baseUrl: string;
+  updatedAt: Date;
+  variables: ProjectVariable[];
+};
+
+type ProjectVariable = {
+  name: string;
+  value: string;
+  updatedAt: Date;
+};
+
+type RunTargetTestCase = {
+  id: string;
+  status: TestCaseStatus;
+  playwrightScript: string | null;
+  scriptGeneratedAt: Date | null;
+};
+
 export async function runTestCase(testCaseId: string) {
-  const testCase = await prisma.testCase.findUnique({ where: { id: testCaseId } });
+  const testCase = (await prisma.testCase.findUnique({
+    where: { id: testCaseId },
+    select: {
+      id: true,
+      status: true,
+      playwrightScript: true,
+      scriptGeneratedAt: true,
+    },
+  })) as RunTargetTestCase | null;
 
   if (!testCase) {
     throw new Error("用例不存在");
@@ -33,7 +60,7 @@ export async function runTestCase(testCaseId: string) {
   });
 
   // 后台异步执行，接口只返回 runId，不阻塞用户等待 Playwright 跑完。
-  void processRun(testCaseId, runLog.id, testCase.status, testCase.playwrightScript);
+  void processRun(testCaseId, runLog.id, testCase.status, testCase.playwrightScript, testCase.scriptGeneratedAt);
 
   return { runId: runLog.id };
 }
@@ -43,20 +70,25 @@ async function processRun(
   runLogId: number,
   previousStatus: TestCaseStatus,
   existingScript: string | null,
+  scriptGeneratedAt: Date | null,
 ) {
   try {
     const project = await getProject();
     let script = existingScript;
-    const shouldRegenerateScript = previousStatus !== "success" || !script;
+    const shouldRegenerateScript = shouldRegenerate(previousStatus, script, scriptGeneratedAt, project);
 
-    // 上次成功且已有脚本时直接复用脚本；失败、未运行或脚本为空时重新生成。
+    // 上次成功、已有脚本且变量未变化时才复用脚本，否则重新生成。
     if (shouldRegenerateScript) {
       await updateStatus(runLogId, testCaseId, "generating");
       const latestTestCase = await prisma.testCase.findUniqueOrThrow({ where: { id: testCaseId } });
-      script = await generateScript(latestTestCase);
+      const resolvedNaturalLanguage = resolveVariables(latestTestCase.naturalLanguage, project.variables);
+      script = await generateScript({ ...latestTestCase, naturalLanguage: resolvedNaturalLanguage });
       await prisma.testCase.update({
         where: { id: testCaseId },
-        data: { playwrightScript: script },
+        data: {
+          playwrightScript: script,
+          scriptGeneratedAt: new Date(),
+        },
       });
     }
 
@@ -80,16 +112,47 @@ async function processRun(
 }
 
 async function getProject() {
-  // MVP 只有一个项目配置；没有配置时自动创建默认项目，避免首次运行阻塞。
-  return (
-    (await prisma.project.findFirst({ orderBy: { id: "asc" } })) ??
-    (await prisma.project.create({
-      data: {
-        name: "默认项目",
-        baseUrl: "http://localhost:5173",
-      },
-    }))
-  );
+  const project = await prisma.project.findFirst({
+    orderBy: { id: "asc" },
+    include: {
+      variables: true,
+    },
+  });
+
+  if (!project) {
+    throw new Error("请先在配置页新建项目");
+  }
+
+  return project;
+}
+
+function shouldRegenerate(
+  previousStatus: TestCaseStatus,
+  script: string | null,
+  scriptGeneratedAt: Date | null,
+  project: ProjectConfig,
+) {
+  if (previousStatus !== "success" || !script || !scriptGeneratedAt) {
+    return true;
+  }
+
+  // 配置按整体保存，project.updatedAt 能覆盖变量被删除后没有行级 updatedAt 的情况。
+  return project.updatedAt > scriptGeneratedAt || project.variables.some((variable) => variable.updatedAt > scriptGeneratedAt);
+}
+
+function resolveVariables(naturalLanguage: string, variables: ProjectVariable[]) {
+  const variableMap = new Map(variables.map((variable) => [variable.name, variable.value]));
+
+  return naturalLanguage.replace(/\$\{([^}]+)\}/g, (_match, variableName: string) => {
+    const name = variableName.trim();
+    const value = variableMap.get(name);
+
+    if (value === undefined) {
+      throw new Error(`变量 ${name} 未配置`);
+    }
+
+    return value;
+  });
 }
 
 async function updateStatus(runLogId: number, testCaseId: string, status: SharedRunningStatus) {
