@@ -13,6 +13,7 @@ export type PlaywrightResult = {
   failureReason?: string;
 };
 
+// 写入指定用例的 spec 文件，并调用 Playwright 执行。
 export async function runPlaywright(
   script: string,
   baseUrl: string,
@@ -62,6 +63,7 @@ export async function runPlaywright(
   }
 }
 
+// 给命令行参数加双引号，避免路径里的空格影响执行。
 function quoteArg(value: string) {
   return `"${value.replaceAll('"', '\\"')}"`;
 }
