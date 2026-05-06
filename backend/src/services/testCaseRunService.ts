@@ -97,7 +97,7 @@ async function processRun(
     const runnableScript = script!;
 
     // runPlaywright 通过 Playwright 命令退出码返回 success，服务层只负责落最终状态。
-    const result = await runPlaywright(runnableScript, project.baseUrl, latestTestCase.title, latestTestCase.id);
+    const result = await runPlaywright(runnableScript, project.baseUrl, latestTestCase.id);
 
     if (result.success) {
       await markFinished(runLogId, testCaseId, "success", result.stdout, result.stderr);

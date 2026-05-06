@@ -16,15 +16,13 @@ export type PlaywrightResult = {
 export async function runPlaywright(
   script: string,
   baseUrl: string,
-  testCaseTitle: string,
   testCaseId: string,
 ): Promise<PlaywrightResult> {
   const generatedDir = path.resolve(process.cwd(), "tests", "generated");
   await mkdir(generatedDir, { recursive: true });
 
-  // 文件名采用“用例名称-用例id”，方便人工定位，同时避免重名用例互相覆盖。
-  const fileBaseName = `${toSafeFileName(testCaseTitle)}-${testCaseId}`;
-  const specFileName = `${fileBaseName}.spec.ts`;
+  // 生成文件固定使用用例 id 命名，避免标题变更后留下旧文件。
+  const specFileName = `${testCaseId}.spec.ts`;
   const specPath = path.join(generatedDir, specFileName);
   const testResultsDir = path.resolve(process.cwd(), "test-results", testCaseId);
 
@@ -36,7 +34,8 @@ export async function runPlaywright(
 
   try {
     // Playwright 的退出码就是运行结果：0 表示通过，非 0 表示失败或执行异常。
-    const command = `npm run test:generated -- --grep ${quoteArg(testCaseId)}`;
+    const specRelativePath = path.relative(process.cwd(), specPath).replaceAll(path.sep, "/");
+    const command = `npm run test:generated -- ${quoteArg(specRelativePath)}`;
     const { stdout, stderr } = await execAsync(command, {
       cwd: process.cwd(),
       env: {
@@ -61,10 +60,6 @@ export async function runPlaywright(
       failureReason: stderr || stdout || result.message || "Playwright 运行失败",
     };
   }
-}
-
-function toSafeFileName(value: string) {
-  return value.trim().replace(/[<>:"/\\|?*\r\n\t]/g, "-").replace(/\s+/g, "-").slice(0, 80) || "test-case";
 }
 
 function quoteArg(value: string) {
