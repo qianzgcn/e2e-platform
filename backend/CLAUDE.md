@@ -13,11 +13,13 @@
 - 如果需求信息不足，请在生成脚本中添加简短的 `TODO` 注释，说明需要用户补充的信息。
 - 除非用户明确要求创建多个文件，否则只创建或覆盖指定的输出文件。
 - 当任务要求写入文件时，必须直接写入目标文件，不要只在终端输出代码。
+- 目标文件位于，tests/generated/{id}.spec.ts，直接创建或者覆盖
 
 #  页面探测要求：
-1. 必须先用 Playwright/CLI 打开真实页面。
-2. 借助playwright-cli能力和浏览器交互
-3. 根据真实页面结构选择 locator。
+1. 借助playwright-cli能力和真实页面交互
+2. 根据真实页面结构选择 locator。
+3. 优先使用 Playwright baseURL 和相对路径；如果自然语言包含完整 URL，可以使用完整 URL。
+4. 不使用Playwright mcp，不要截图。只用playwright-cli。
 
 ## 标准示例
 

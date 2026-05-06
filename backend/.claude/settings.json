@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Write",
+      "Edit",
+      "MultiEdit",
+      "Glob",
+      "Grep",
+      "LS",
+      "Skill(playwright-cli)",
+      "Bash(*)",
+      "Bash(playwright-cli:*)",
+      "Bash(playwright-cli open *)",
+      "Bash(npx:*)",
+      "Bash(npm:*)",
+      "Bash(node:*)",
+      "Bash(mkdir:*)"
+    ]
+  }
+}
