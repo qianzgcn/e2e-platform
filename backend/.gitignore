@@ -3,4 +3,5 @@ dist
 .env
 playwright-report
 test-results
+tests/generated
 artifacts
