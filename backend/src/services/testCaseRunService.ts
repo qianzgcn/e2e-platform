@@ -35,6 +35,7 @@ type RunTask = {
 
 // 运行单个用例并返回对应运行日志 id。
 export async function runTestCase(testCaseId: string) {
+  logRun("收到单用例运行请求", { testCaseId });
   // 单条运行复用批量编排，避免单条和批量生成逻辑分叉。
   const result = await runTestCases([testCaseId]);
   return { runId: result.runIds[0] };
@@ -42,9 +43,11 @@ export async function runTestCase(testCaseId: string) {
 
 // 批量创建运行日志并启动后台执行流程。
 export async function runTestCases(testCaseIds: string[]) {
+  logRun("收到批量运行请求", { testCaseIds });
   const testCases = await findRunTargets(testCaseIds);
 
   if (testCases.length !== testCaseIds.length) {
+    logRun("运行请求包含不存在的用例", { requested: testCaseIds.length, found: testCases.length });
     throw new Error("用例不存在");
   }
 
@@ -71,6 +74,12 @@ export async function runTestCases(testCaseIds: string[]) {
     });
 
     tasks.push({ runLogId: runLog.id, testCase });
+    logRun("创建运行日志并设置排队中", {
+      runLogId: runLog.id,
+      testCaseId: testCase.id,
+      title: testCase.title,
+      status: "queued",
+    });
   }
 
   // 后台异步执行，接口只返回 runId，不阻塞用户等待 Claude 和 Playwright。
@@ -82,6 +91,10 @@ export async function runTestCases(testCaseIds: string[]) {
 // 后台处理一批用例：先按需生成脚本，再逐个执行。
 async function processRuns(tasks: RunTask[]) {
   try {
+    logRun("开始后台运行批次", {
+      runLogIds: tasks.map((task) => task.runLogId),
+      testCaseIds: tasks.map((task) => task.testCase.id),
+    });
     const project = await getProject();
 
     // 同一次 API 请求内，需要生成的用例先合并给 Claude，再逐个执行 Playwright。
@@ -90,8 +103,12 @@ async function processRuns(tasks: RunTask[]) {
     for (const task of tasks) {
       await executeTask(task, project.baseUrl);
     }
+    logRun("后台运行批次结束", {
+      runLogIds: tasks.map((task) => task.runLogId),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "运行失败";
+    logRun("后台运行批次失败", { message });
     await Promise.all(tasks.map((task) => markFinished(task.runLogId, task.testCase.id, "failed", "", "", message)));
   }
 }
@@ -104,6 +121,11 @@ async function generateNeededScripts(tasks: RunTask[], project: ProjectConfig) {
     const { testCase } = task;
 
     if (!shouldRegenerate(testCase.status, testCase.playwrightScript, testCase.scriptGeneratedAt, project)) {
+      logRun("复用已有脚本，跳过 agent 生成", {
+        runLogId: task.runLogId,
+        testCaseId: testCase.id,
+        status: testCase.status,
+      });
       continue;
     }
 
@@ -118,8 +140,18 @@ async function generateNeededScripts(tasks: RunTask[], project: ProjectConfig) {
           naturalLanguage: resolvedNaturalLanguage,
         },
       });
+      logRun("用例需要 agent 生成", {
+        runLogId: task.runLogId,
+        testCaseId: testCase.id,
+        title: testCase.title,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "变量解析失败";
+      logRun("变量解析失败", {
+        runLogId: task.runLogId,
+        testCaseId: testCase.id,
+        message,
+      });
       await markFinished(task.runLogId, testCase.id, "failed", "", "", message);
     }
   }
@@ -131,6 +163,10 @@ async function generateNeededScripts(tasks: RunTask[], project: ProjectConfig) {
 
   const generationTasks = generationItems.map((item) => item.task);
   await Promise.all(generationTasks.map((task) => updateStatus(task.runLogId, task.testCase.id, "generating")));
+  logRun("开始批量调用 agent 生成脚本", {
+    caseCount: generationItems.length,
+    testCaseIds: generationItems.map((item) => item.source.id),
+  });
 
   try {
     // 这里是批量生成的关键：一次 Claude 调用生成本批次所有需要更新的 spec 文件。
@@ -140,15 +176,26 @@ async function generateNeededScripts(tasks: RunTask[], project: ProjectConfig) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Claude Code 生成用例失败";
+    logRun("批量调用 agent 失败", {
+      testCaseIds: generationItems.map((item) => item.source.id),
+      message,
+    });
     await Promise.all(generationTasks.map((task) => markFinished(task.runLogId, task.testCase.id, "failed", "", "", message)));
     return;
   }
 
   await Promise.all(generationItems.map((item) => saveGeneratedScript(item.task)));
+  logRun("批量 agent 生成脚本保存完成", {
+    testCaseIds: generationItems.map((item) => item.source.id),
+  });
 }
 
 // 执行单个用例的 Playwright 脚本并落最终状态。
 async function executeTask(task: RunTask, baseUrl: string) {
+  logRun("准备执行用例", {
+    runLogId: task.runLogId,
+    testCaseId: task.testCase.id,
+  });
   // 重新从数据库读取脚本，确保拿到 Claude 刚生成并保存的最新内容。
   const latestTestCase = await prisma.testCase.findUniqueOrThrow({
     where: { id: task.testCase.id },
@@ -161,6 +208,12 @@ async function executeTask(task: RunTask, baseUrl: string) {
 
   // 变量解析或 agent 生成阶段已经失败的用例，不再进入 Playwright 执行。
   if (latestTestCase.status === "failed" || !latestTestCase.playwrightScript) {
+    logRun("跳过 Playwright 执行", {
+      runLogId: task.runLogId,
+      testCaseId: latestTestCase.id,
+      status: latestTestCase.status,
+      hasScript: Boolean(latestTestCase.playwrightScript),
+    });
     return;
   }
 
@@ -170,10 +223,19 @@ async function executeTask(task: RunTask, baseUrl: string) {
   const result = await runPlaywright(latestTestCase.playwrightScript, baseUrl, latestTestCase.id);
 
   if (result.success) {
+    logRun("用例执行成功", {
+      runLogId: task.runLogId,
+      testCaseId: latestTestCase.id,
+    });
     await markFinished(task.runLogId, latestTestCase.id, "success", result.stdout, result.stderr);
     return;
   }
 
+  logRun("用例执行失败", {
+    runLogId: task.runLogId,
+    testCaseId: latestTestCase.id,
+    failureReason: result.failureReason,
+  });
   await markFinished(task.runLogId, latestTestCase.id, "failed", result.stdout, result.stderr, result.failureReason);
 }
 
@@ -194,7 +256,18 @@ async function saveGeneratedScript(task: RunTask) {
         scriptGeneratedAt: task.testCase.scriptGeneratedAt,
       },
     });
+    logRun("保存 agent 生成脚本", {
+      runLogId: task.runLogId,
+      testCaseId: task.testCase.id,
+      specPath,
+      scriptLength: script.length,
+    });
   } catch {
+    logRun("agent 未生成目标 spec 文件", {
+      runLogId: task.runLogId,
+      testCaseId: task.testCase.id,
+      specPath,
+    });
     await markFinished(
       task.runLogId,
       task.testCase.id,
@@ -239,9 +312,15 @@ async function getProject() {
   });
 
   if (!project) {
+    logRun("没有项目配置，无法运行用例");
     throw new Error("请先在配置页新建项目");
   }
 
+  logRun("读取项目配置", {
+    projectId: project.id,
+    baseUrl: project.baseUrl,
+    variableCount: project.variables.length,
+  });
   return project;
 }
 
@@ -280,6 +359,7 @@ function resolveVariables(naturalLanguage: string, variables: ProjectVariable[])
 
 // 同步更新运行日志和用例的运行状态。
 async function updateStatus(runLogId: number, testCaseId: string, status: SharedRunningStatus) {
+  logRun("更新用例运行状态", { runLogId, testCaseId, status });
   // 运行日志和用例状态保持同步，列表页可以直接读取 TestCase.status。
   await Promise.all([
     prisma.runLog.update({ where: { id: runLogId }, data: { status } }),
@@ -297,6 +377,12 @@ async function markFinished(
   failureReason?: string,
 ) {
   const finishedAt = new Date();
+  logRun("标记运行结束", {
+    runLogId,
+    testCaseId,
+    status,
+    failureReason,
+  });
 
   // 结束时写入 stdout/stderr，失败原因同步到用例表用于列表快速展示。
   await Promise.all([
@@ -319,4 +405,9 @@ async function markFinished(
       },
     }),
   ]);
+}
+
+// 输出运行服务日志。
+function logRun(message: string, data?: unknown) {
+  console.log(`[testCaseRunService] ${message}`, data ?? "");
 }

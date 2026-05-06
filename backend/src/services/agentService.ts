@@ -1,9 +1,4 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
-const CLAUDE_COMMAND = "claude";
-const CLAUDE_OUTPUT_BUFFER = 1024 * 1024 * 10;
+import { runClaude } from "./runClaude.js";
 
 export type ScriptSource = {
   title: string;
@@ -23,18 +18,31 @@ export async function generateScripts(testCases: ScriptSource[], baseUrl: string
   }
 
   const prompt = buildPrompt(testCases, baseUrl);
+  console.log("提示词", prompt);
+  logAgent("准备调用 Claude Code", {
+    caseCount: testCases.length,
+    caseIds: testCases.map((testCase) => testCase.id),
+    baseUrl,
+    promptLength: prompt.length,
+  });
 
   try {
-    // 使用 execFile 直接传参，避免自然语言 prompt 里的引号、换行被 shell 解析破坏。
     // Claude 的职责是写入 spec 文件；后续由运行服务读取文件并保存到数据库。
-    await execFileAsync(CLAUDE_COMMAND, ["-p", prompt], {
-      cwd: process.cwd(),
-      maxBuffer: CLAUDE_OUTPUT_BUFFER,
-      windowsHide: true,
+    await runClaude(prompt, { cwd: process.cwd() });
+    logAgent("Claude Code 生成完成", {
+      caseIds: testCases.map((testCase) => testCase.id),
     });
   } catch (error) {
-    const result = error as { stdout?: string; stderr?: string; message?: string };
-    throw new Error(result.stderr || result.stdout || result.message || "Claude Code 生成用例失败");
+    const result = error as { stdout?: string; stderr?: string; message?: string; killed?: boolean; signal?: string };
+    const message = getClaudeErrorMessage(result);
+    logAgent("Claude Code 生成失败", {
+      stderr: result.stderr,
+      stdout: result.stdout,
+      message,
+      killed: result.killed,
+      signal: result.signal,
+    });
+    throw new Error(message);
   }
 }
 
@@ -48,22 +56,25 @@ function buildPrompt(testCases: ScriptSource[], baseUrl: string) {
   };
 
   return `
-你是一个 Playwright 测试生成 agent。
-当前工作目录是 backend。
-参考backend/CLAUDE.md
-请根据输入的自然语言用例生成 Playwright 测试文件。
-
-严格要求：
-- 只允许创建或覆盖 tests/generated/{id}.spec.ts。
-- 每个输入用例必须生成一个独立 .spec.ts 文件。
-- 文件名必须严格等于 {id}.spec.ts。
-- 优先使用 Playwright baseURL 和相对路径；如果自然语言包含完整 URL，可以使用完整 URL。
-- 不要修改 playwright.config.ts、package.json、数据库或其它源码。
-- 只完成文件写入。
-- 生成脚本应简洁、可读，避免硬编码无关等待。
-- 若步骤不明确，按自然语言中最直接的用户意图实现，不额外扩展场景。
+参考CLAUDE.md生成测试用例脚本。
+请根据输入的自然语言用例（naturalLanguage）生成 Playwright 测试文件。
+用例标题使用testCases的title字段。
 
 输入数据：
 ${JSON.stringify(payload, null, 2)}
 `.trim();
+}
+
+// 统一转换 Claude 执行错误信息。
+function getClaudeErrorMessage(error: { stdout?: string; stderr?: string; message?: string; killed?: boolean; signal?: string }) {
+  if (error.killed || error.signal === "SIGTERM") {
+    return "Claude Code 生成用例超时，已终止执行";
+  }
+
+  return error.stderr || error.stdout || error.message || "Claude Code 生成用例失败";
+}
+
+// 输出 agent 服务日志。
+function logAgent(message: string, data?: unknown) {
+  console.log(`[agentService] ${message}`, data ?? "");
 }
