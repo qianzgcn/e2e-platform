@@ -18,22 +18,22 @@ backend/   后端项目
 
 ## 启动后端
 
-```powershell
-cd C:\workspace\e2e-platform\backend
+```bash
+cd backend
 npm install
-copy .env.example .env
+cp .env.example .env
 ```
 
 第一次初始化数据库，或修改了 `backend/prisma/schema.prisma` 后执行：
 
-```powershell
+```bash
 npm run prisma:migrate
 npm run prisma:generate
 ```
 
 平时启动后端只需要：
 
-```powershell
+```bash
 npm run dev
 ```
 
@@ -45,8 +45,8 @@ http://localhost:3001
 
 ## 启动前端
 
-```powershell
-cd C:\workspace\e2e-platform\frontend
+```bash
+cd frontend
 npm install
 npm run dev
 ```
@@ -67,26 +67,26 @@ backend/tests/generated
 
 运行所有生成用例：
 
-```powershell
-cd C:\workspace\e2e-platform\backend
+```bash
+cd backend
 npm run test:generated
 ```
 
 有界面运行：
 
-```powershell
+```bash
 npm run test:generated:headed
 ```
 
 打开 Playwright UI：
 
-```powershell
+```bash
 npm run test:generated:ui
 ```
 
 后端接口触发单个用例运行时，会调用：
 
-```powershell
+```bash
 npm run test:generated -- --grep <用例id>
 ```
 

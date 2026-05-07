@@ -5,6 +5,7 @@ import path from "node:path";
 
 const testCaseId = process.env.PLAYWRIGHT_TEST_CASE_ID || "latest";
 const testResultsDir = path.resolve("test-results", testCaseId);
+const testArtifactsDir = path.join(testResultsDir, "artifacts");
 
 // 后端生成的自动化用例统一放在 tests/generated 目录。
 // 平台运行用例时只执行这个目录，避免误跑其它测试文件。
@@ -28,8 +29,8 @@ export default defineConfig({
     ["html", { outputFolder: path.join(testResultsDir, "html-report"), open: "never" }],
   ],
 
-  // 视频和报告统一放在 test-results 目录下，运行日志直接从这里读取。
-  outputDir: testResultsDir,
+  // 视频等测试附件放在 artifacts 子目录，避免 HTML 报告清理附件目录。
+  outputDir: testArtifactsDir,
 
   use: {
     // runner 会通过 PLAYWRIGHT_BASE_URL 注入项目配置里的 baseUrl。

@@ -47,7 +47,7 @@ export async function generateScripts(testCases: ScriptSource[], baseUrl: string
 }
 
 // 构造传给 Claude Code 的完整提示词。
-function buildPrompt(testCases: ScriptSource[], baseUrl: string) {
+export function buildPrompt(testCases: ScriptSource[], baseUrl: string) {
   // prompt 里的 payload 用 JSON 承载，避免自然语言分隔符导致 Claude 误读用例边界。
   const payload = {
     baseUrl,
@@ -56,9 +56,16 @@ function buildPrompt(testCases: ScriptSource[], baseUrl: string) {
   };
 
   return `
-参考CLAUDE.md生成测试用例脚本。
-请根据输入的自然语言用例（naturalLanguage）生成 Playwright 测试文件。
-用例标题使用testCases的title字段。
+任务：参考 CLAUDE.md，把自然语言用例生成统一格式的 Playwright spec 文件。
+
+优先级：
+1. 输入数据中的 baseUrl、outputDir、testCases 为准。
+2. 严格遵守 CLAUDE.md 的输出模板和步骤注释格式。
+
+输出格式：
+- 每个 testCase 写入一个 {outputDir}/{id}.spec.ts 文件。
+- 代码内用“// 步骤 N：...”和“// 断言 N：...”表达自然语言脚本。
+- 导航：使用完整 URL；相对页面先按 baseUrl 解析，禁止 page.goto('/')。
 
 输入数据：
 ${JSON.stringify(payload, null, 2)}

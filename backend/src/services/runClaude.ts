@@ -1,8 +1,31 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptionsWithoutStdio } from "node:child_process";
 
 const CLAUDE_COMMAND = "claude";
-const WINDOWS_COMMAND = "powershell.exe";
 const CLAUDE_TIMEOUT = 3 * 60 * 1000;
+const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
+
+const CLAUDE_ARGS = [
+  // -p: 使用 Claude Code 的非交互 print mode，输出完成后立即退出。
+  "-p",
+  // --output-format: 指定 stdout 的输出格式。
+  "--output-format",
+  // text: 当前业务只关心 Claude 是否写入文件，不依赖结构化 stdout。
+  "text",
+  // --input-format: 指定 stdin 的输入格式。
+  "--input-format",
+  // text: 后端通过 stdin 传入普通文本 prompt。
+  "text",
+  // --no-session-persistence: 每次生成独立执行，不写入或复用会话历史。
+  "--no-session-persistence",
+  // --permission-mode: 指定非交互环境下的权限处理策略。
+  "--permission-mode",
+  // dontAsk: 未被 settings 预批准的工具直接失败，避免服务端卡在确认提示。
+  "dontAsk",
+  // --settings: 显式加载项目内的 Claude Code 权限配置。
+  "--settings",
+  // .claude/settings.json: backend 目录下的受控工具 allowlist。
+  CLAUDE_SETTINGS_PATH,
+];
 
 type RunClaudeOptions = {
   cwd?: string;
@@ -10,16 +33,16 @@ type RunClaudeOptions = {
   timeout?: number;
 };
 
-type ClaudeInvocation = {
+export type ClaudeInvocation = {
   command: string;
   args: string[];
-  stdin?: string;
+  stdin: string;
 };
 
 // 运行 Claude Code CLI，并返回 stdout 文本。
 export function runClaude(prompt: string, options: RunClaudeOptions = {}) {
   return new Promise<string>((resolve, reject) => {
-    const invocation = getClaudeInvocation(prompt);
+    const invocation = createClaudeInvocation(prompt);
     const timeout = options.timeout ?? CLAUDE_TIMEOUT;
     let stdout = "";
     let stderr = "";
@@ -29,24 +52,14 @@ export function runClaude(prompt: string, options: RunClaudeOptions = {}) {
       command: invocation.command,
       args: invocation.args,
       fullCommand: formatCommand(invocation.command, invocation.args),
-      stdin: invocation.stdin,
+      promptLength: invocation.stdin.length,
       cwd: options.cwd ?? process.cwd(),
       timeout,
     });
 
-    const child = spawn(invocation.command, invocation.args, {
-      cwd: options.cwd ?? process.cwd(),
-      shell: false,
-      windowsHide: true,
-      env: {
-        ...process.env,
-        ...options.env,
-      },
-    });
+    const child = spawn(invocation.command, invocation.args, createClaudeSpawnOptions(options));
 
-    if (invocation.stdin) {
-      child.stdin.write(invocation.stdin);
-    }
+    child.stdin.write(invocation.stdin);
     child.stdin.end();
 
     const timer = setTimeout(() => {
@@ -111,29 +124,25 @@ export function runClaude(prompt: string, options: RunClaudeOptions = {}) {
   });
 }
 
-// 生成当前平台可用的 Claude 调用命令。
-function getClaudeInvocation(prompt: string): ClaudeInvocation {
-  const args = ["-p", "--output-format", "text"];
-
-  if (process.platform === "win32") {
-    const command = [
-      "[Console]::InputEncoding = [System.Text.Encoding]::UTF8",
-      "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
-      "$OutputEncoding = [System.Text.Encoding]::UTF8",
-      "$input | claude -p --output-format text",
-    ].join("; ");
-
-    return {
-      command: WINDOWS_COMMAND,
-      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
-      stdin: prompt,
-    };
-  }
-
+// 生成 Linux 环境下的 Claude Code 调用命令。
+export function createClaudeInvocation(prompt: string): ClaudeInvocation {
   return {
     command: CLAUDE_COMMAND,
-    args,
+    args: [...CLAUDE_ARGS],
     stdin: prompt,
+  };
+}
+
+// 生成 Linux 环境下的 spawn 配置；参数变更时要同步更新对应注释。
+export function createClaudeSpawnOptions(options: RunClaudeOptions = {}): SpawnOptionsWithoutStdio {
+  return {
+    cwd: options.cwd ?? process.cwd(),
+    // shell: false 让参数原样传给 claude，避免 shell 转义和注入问题。
+    shell: false,
+    env: {
+      ...process.env,
+      ...options.env,
+    },
   };
 }
 

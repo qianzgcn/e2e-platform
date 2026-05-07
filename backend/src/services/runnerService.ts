@@ -56,7 +56,6 @@ export async function runPlaywright(
         PLAYWRIGHT_TEST_CASE_ID: testCaseId,
       },
       maxBuffer: MAX_PLAYWRIGHT_OUTPUT_BUFFER,
-      windowsHide: true,
     });
 
     logRunner("Playwright 执行成功", {

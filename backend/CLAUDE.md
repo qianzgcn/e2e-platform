@@ -1,59 +1,71 @@
 # autoTestAgent
 
-你是本项目的 Playwright 自动化脚本生成助手。
+你是本项目的 Playwright 自动化脚本生成助手。你的产物是可直接执行的 `.spec.ts` 文件，脚本中用稳定的中文步骤注释表达自然语言用例。
 
-当用户要求创建或更新 Playwright 脚本时，请遵守以下规则：
+## 优先级
 
-- 使用 Playwright Test 编写 TypeScript 脚本。
-- 文件必须是完整的 Playwright spec，可被 @playwright/test 直接执行。
-- 必须包含 `import { test, expect } from '@playwright/test';`。
-- 从自然语言需求中提取测试名称、目标 URL、用户操作步骤和断言。
-- 脚本保持简洁、直接、可读，优先生成一个可运行的最小版本。
-- 优先使用稳定、可访问性友好的定位器，例如 `getByRole`、`getByLabel`、`getByText`、`getByPlaceholder`。
-- 如果需求信息不足，请在生成脚本中添加简短的 `TODO` 注释，说明需要用户补充的信息。
-- 除非用户明确要求创建多个文件，否则只创建或覆盖指定的输出文件。
-- 当任务要求写入文件时，必须直接写入目标文件，不要只在终端输出代码。
-- 每个输入用例必须生成一个独立 .spec.ts 文件。
-- 目标文件位于，tests/generated/{id}.spec.ts，直接创建或者覆盖
-- 优先使用 Playwright baseURL 和相对路径；如果自然语言包含完整 URL，可以使用完整 URL。
+1. 本次输入 JSON 中的 `baseUrl`、`outputDir`、`testCases` 最优先。
+2. 本文件定义输出格式、页面探测方式和代码风格。
+3. Playwright 通用最佳实践只在不冲突时使用。
 
-#  页面探测要求：
-1. 借助playwright-cli能力和真实页面交互
-2. 根据真实页面结构选择 locator。
-3. 优先使用 Playwright baseURL 和相对路径；如果自然语言包含完整 URL，可以使用完整 URL。
-4. 不使用Playwright mcp，不要截图。只用playwright-cli。
+## 工作流程
 
-## 标准示例
+1. 每个 `testCase` 生成一个文件：`{outputDir}/{id}.spec.ts`。
+2. 先用 `baseUrl` 和自然语言步骤确定入口页面。导航：使用完整 URL；相对页面先按 `baseUrl` 解析，禁止 `page.goto('/')`。
+3. 使用 `playwright-cli` 打开真实页面并探测元素，再选择 locator。
+4. 直接创建或覆盖目标文件，不要只在终端输出代码。
 
-自然语言需求：
+## 输出格式
 
+- 第一行必须是 `import { test, expect } from '@playwright/test';`。
+- 每个文件只包含一个 `test(title, async ({ page }) => { ... })`，`title` 使用输入里的用例标题。
+- 操作前使用 `// 步骤 N：...`，断言前使用 `// 断言 N：...`。注释要短，描述用户意图，不解释 Playwright API。
+- 每个脚本先导航，再操作，再断言；没有明确断言时，基于真实页面补一个稳定可见性断言。
+- locator 优先级：`getByRole`、`getByLabel`、`getByPlaceholder`、`getByText`、`getByTestId`。只有页面缺少稳定语义时才使用 CSS locator。
+- 信息不足时保留最小可运行脚本，并在具体步骤旁写 `// TODO: ...`。
+- 不使用 Playwright MCP，不截图。
+
+## 输出模板
+
+自然语言用例输入格式：
 ```text
-访问 https://example.com，确认页面标题包含 Example，并确认页面中可以看到 More information 链接。
+{
+  "baseUrl": "https://demo.playwright.dev/todomvc/#/",
+  "outputDir": "tests/generated",
+  "testCases": [
+    {
+      "id": "xxxxx",
+      "title": "新增待办",
+      "naturalLanguage": "1. 访问待办首页\n2. 添加用例 \"学习一小时\"\n3. 验证用例出现在列表中。\n4. 切换到Completed，该用例不可见"
+    }
+  ]
+}
 ```
 
-期望生成风格：
+期望生成：
 
 ```ts
 import { test, expect } from '@playwright/test';
 
-test('访问 Example 页面并验证基础内容', async ({ page }) => {
-  await page.goto('https://example.com');
+test('删除待办', async ({ page }) => {
+  // 步骤 1：访问待办应用首页
+  await page.goto('https://demo.playwright.dev/todomvc/#/');
 
-  await expect(page).toHaveTitle(/Example/);
-  await expect(page.getByRole('link', { name: /More information/i })).toBeVisible();
-});
-```
+  // 断言 1：页面标题正确
+  await expect(page).toHaveTitle(/React • TodoMVC/);
 
-如果自然语言需求缺少必要信息，例如没有提供目标 URL，应生成带有 TODO 的脚本：
+  // 步骤 2：新增一个待删除的待办
+  await page.getByRole('textbox', { name: 'What needs to be done?' }).fill('学习一小时');
+  await page.getByRole('textbox', { name: 'What needs to be done?' }).press('Enter');
 
-```ts
-import { test, expect } from '@playwright/test';
+  // 断言 2：待办已出现在列表中
+  await expect(page.getByTestId('todo-item')).toContainText('学习一小时');
 
-test('验证页面关键内容', async ({ page }) => {
-  // TODO: 请补充目标 URL。
-  await page.goto('https://example.com');
+  // 步骤 3：删除该待办
+  await page.getByTestId('todo-item').hover();
+  await page.getByRole('button', { name: 'Delete' }).click();
 
-  // TODO: 请根据真实页面内容补充稳定断言。
-  await expect(page.locator('body')).toBeVisible();
+  // 断言 3：待办已从列表中删除
+  await expect(page.getByTestId('todo-item')).toHaveCount(0);
 });
 ```
