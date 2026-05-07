@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { generateScripts, type ScriptSource } from "./agentService.js";
+import { cleanupPlaywrightCliWorkspace } from "./cleanupService.js";
 import { prisma } from "../prisma.js";
 import { runPlaywright } from "./runnerService.js";
 
@@ -110,6 +111,19 @@ async function processRuns(tasks: RunTask[]) {
     const message = error instanceof Error ? error.message : "运行失败";
     logRun("后台运行批次失败", { message });
     await Promise.all(tasks.map((task) => markFinished(task.runLogId, task.testCase.id, "failed", "", "", message)));
+  } finally {
+    await cleanupRunWorkspace();
+  }
+}
+
+// 运行批次结束后清理 playwright-cli 页面探测产物，避免历史快照影响下一次生成。
+async function cleanupRunWorkspace() {
+  try {
+    await cleanupPlaywrightCliWorkspace();
+    logRun("清理 playwright-cli 工作目录完成");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "清理 playwright-cli 工作目录失败";
+    logRun("清理 playwright-cli 工作目录失败", { message });
   }
 }
 

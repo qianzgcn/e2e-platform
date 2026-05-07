@@ -1,7 +1,8 @@
 import { exec } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { resetPlaywrightTestResults } from "./cleanupService.js";
 
 const execAsync = promisify(exec);
 const MAX_PLAYWRIGHT_OUTPUT_BUFFER = 1024 * 1024 * 10;
@@ -26,14 +27,12 @@ export async function runPlaywright(
   // 生成文件固定使用用例 id 命名，避免标题变更后留下旧文件。
   const specFileName = `${testCaseId}.spec.ts`;
   const specPath = path.join(generatedDir, specFileName);
-  const testResultsDir = path.resolve(process.cwd(), "test-results", testCaseId);
 
   await writeFile(specPath, script, "utf8");
   logRunner("写入 Playwright spec 文件", { testCaseId, specPath, scriptLength: script.length });
 
   // 每个用例只保留最新一次产物，运行前先清空该用例自己的结果目录。
-  await rm(testResultsDir, { recursive: true, force: true });
-  await mkdir(testResultsDir, { recursive: true });
+  const testResultsDir = await resetPlaywrightTestResults(testCaseId);
   logRunner("重建 Playwright 产物目录", { testCaseId, testResultsDir });
 
   try {
