@@ -10,9 +10,9 @@
 
 ## 工作流程
 
-1. 每个 `testCase` 生成一个文件：`{outputDir}/{id}.spec.ts`。
-2. 先用 `baseUrl` 和自然语言步骤确定入口页面。导航：使用完整 URL；相对页面先按 `baseUrl` 解析，禁止 `page.goto('/')`。
-3. 使用 `playwright-cli` 打开真实页面并探测元素，再选择 locator。
+1. 使用 `playwright-cli` 打开真实页面并探测元素，再选择 locator和编写用例。
+2. 每个 `testCase` 生成一个文件：`{outputDir}/{id}.spec.ts`。
+3. 先用 `baseUrl` 和自然语言步骤确定入口页面。导航：使用完整 URL；相对页面先按 `baseUrl` 解析，禁止 `page.goto('/')`。
 4. 直接创建或覆盖目标文件，不要只在终端输出代码。
 
 ## 输出格式
@@ -24,6 +24,32 @@
 - locator 优先级：`getByRole`、`getByLabel`、`getByPlaceholder`、`getByText`、`getByTestId`。只有页面缺少稳定语义时才使用 CSS locator。
 - 信息不足时保留最小可运行脚本，并在具体步骤旁写 `// TODO: ...`。
 - 不使用 Playwright MCP，不截图。
+
+## 登录
+
+- 自然语言用例需要登录时，必须导入：`import { login } from '../utils/auth';`。
+- 调用 `login(page, { baseUrl, username, password })`；`baseUrl` 使用输入的 `baseUrl`，`username` 和 `password` 使用自然语言里的账号和密码。
+- 登录需要访问 `baseUrl + /login`，并完成用户名、密码、验证码（从cookies里的'_COOKIE_KEY_CAPTCHA_'获取）填写和提交。
+- 用例里不要再手写登录页跳转、验证码读取、表单填写或点击登录。
+
+登录示例片段：
+
+```ts
+import { test, expect } from '@playwright/test';
+import { login } from '../utils/auth';
+
+test('登录示例', async ({ page }) => {
+  // 步骤 1：使用账号密码登录
+  await login(page, {
+    baseUrl: 'https://example.com',
+    username: '自然语言中的用户名',
+    password: '自然语言中的密码',
+  });
+
+  // 断言 1：登录成功
+  await expect(page).toHaveURL(/\/dashboard/);
+});
+```
 
 ## 输出模板
 

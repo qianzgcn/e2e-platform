@@ -52,3 +52,17 @@ test("CLAUDE.md defines one concrete output example with step and assertion comm
   assert.doesNotMatch(instructions, /必须根据输入数据中的 `baseUrl` 生成导航地址/);
   assert.doesNotMatch(instructions, /导航代码统一写成/);
 });
+
+test("CLAUDE.md instructs generated specs to use the shared login helper", () => {
+  const instructions = readFileSync("CLAUDE.md", "utf8");
+
+  assert.match(instructions, /## 登录/);
+  assert.match(instructions, /使用.*账号.*密码.*登录/);
+  assert.match(instructions, /baseUrl.*\/login/);
+  assert.match(instructions, /import \{ login \} from '\.\.\/utils\/auth';/);
+  assert.match(instructions, /await login\(page, \{/);
+  assert.match(instructions, /baseUrl: 'https:\/\/example\.com'/);
+  assert.match(instructions, /不要再手写登录页跳转、验证码读取、表单填写或点击登录/);
+  assert.doesNotMatch(instructions, /getCaptchaFromCookie/);
+  assert.doesNotMatch(instructions, /common_user|common_password/);
+});

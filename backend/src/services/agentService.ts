@@ -56,7 +56,7 @@ export function buildPrompt(testCases: ScriptSource[], baseUrl: string) {
   };
 
   return `
-任务：参考 CLAUDE.md，把自然语言用例生成统一格式的 Playwright spec 文件。
+请参考 CLAUDE.md，把自然语言用例生成统一格式的 Playwright spec 文件。
 
 优先级：
 1. 输入数据中的 baseUrl、outputDir、testCases 为准。
