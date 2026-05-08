@@ -64,6 +64,8 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
       open={open}
       onCancel={onCancel}
       onOk={handleOk}
+      cancelText="取消"
+      okText="保存"
       confirmLoading={loading}
       width={showScript ? "calc(100vw - 80px)" : 640}
       centered
@@ -90,7 +92,7 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
               label={
                 <span className="flex w-full items-center justify-between">
                   <span>分组</span>
-                  <Button type="link" size="small" className="!h-auto !p-0" onClick={() => setGroupModalOpen(true)}>
+                  <Button type="link" size="small" className="ml-2 !h-auto !p-0" onClick={() => setGroupModalOpen(true)}>
                     新建分组
                   </Button>
                 </span>
