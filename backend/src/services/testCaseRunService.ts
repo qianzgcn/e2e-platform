@@ -4,8 +4,15 @@ import { generateScripts, type ScriptSource } from "./agentService.js";
 import { cleanupPlaywrightCliWorkspace } from "./cleanupService.js";
 import { prisma } from "../prisma.js";
 import { runPlaywright } from "./runnerService.js";
+import { chunkByAgentGenerationBatchSize } from "./runBatch.js";
+import {
+  SUBMITTABLE_STATUSES,
+  splitRunTargetsByStatus,
+  toSkippedRunCase,
+  type SkippedRunCase,
+  type TestCaseRunStatus,
+} from "./runStatus.js";
 
-type TestCaseStatus = "not_run" | "queued" | "generating" | "running" | "success" | "failed";
 type SharedRunningStatus = "queued" | "generating" | "running" | "success" | "failed";
 
 type ProjectConfig = {
@@ -24,7 +31,7 @@ type RunTargetTestCase = {
   id: string;
   title: string;
   naturalLanguage: string;
-  status: TestCaseStatus;
+  status: TestCaseRunStatus;
   playwrightScript: string | null;
   scriptGeneratedAt: Date | null;
 };
@@ -34,12 +41,25 @@ type RunTask = {
   testCase: RunTargetTestCase;
 };
 
-// 运行单个用例并返回对应运行日志 id。
+type GenerationItem = {
+  task: RunTask;
+  source: ScriptSource;
+};
+
+type ReadyTaskQueue = {
+  items: RunTask[];
+  generationFinished: boolean;
+  wakeRunner?: () => void;
+};
+
+const runBatchQueue: RunTask[][] = [];
+let isRunBatchQueueDraining = false;
+
+// 单条运行复用批量提交结果，返回统一的 runIds/skippedCases 结构。
 export async function runTestCase(testCaseId: string) {
   logRun("收到单用例运行请求", { testCaseId });
   // 单条运行复用批量编排，避免单条和批量生成逻辑分叉。
-  const result = await runTestCases([testCaseId]);
-  return { runId: result.runIds[0] };
+  return runTestCases([testCaseId]);
 }
 
 // 批量创建运行日志并启动后台执行流程。
@@ -52,44 +72,114 @@ export async function runTestCases(testCaseIds: string[]) {
     throw new Error("用例不存在");
   }
 
-  const now = new Date();
-  const tasks: RunTask[] = [];
+  const { runnableTestCases, skippedCases } = splitRunTargetsByStatus(testCases);
+  const queuedResult = runnableTestCases.length
+    ? await createQueuedRunTasks(runnableTestCases)
+    : { tasks: [], skippedCases: [] };
+  const allSkippedCases = [...skippedCases, ...queuedResult.skippedCases];
 
-  for (const testCase of testCases) {
-    // 用户点击运行后立即落库，前端可以马上看到“排队中”的运行记录。
-    const runLog = await prisma.runLog.create({
-      data: {
-        testCaseId: testCase.id,
-        status: "queued",
-        startedAt: now,
-      },
-    });
-
-    await prisma.testCase.update({
-      where: { id: testCase.id },
-      data: {
-        status: "queued",
-        lastRunAt: now,
-        lastFailureReason: null,
-      },
-    });
-
-    tasks.push({ runLogId: runLog.id, testCase });
-    logRun("创建运行日志并设置排队中", {
-      runLogId: runLog.id,
-      testCaseId: testCase.id,
-      title: testCase.title,
-      status: "queued",
-    });
+  if (queuedResult.tasks.length) {
+    enqueueRunBatch(queuedResult.tasks);
   }
 
-  // 后台异步执行，接口只返回 runId，不阻塞用户等待 Claude 和 Playwright。
-  void processRuns(tasks);
+  logRun("批量运行提交完成", {
+    queuedCount: queuedResult.tasks.length,
+    skippedCount: allSkippedCases.length,
+  });
 
-  return { runIds: tasks.map((task) => task.runLogId) };
+  return {
+    runIds: queuedResult.tasks.map((task) => task.runLogId),
+    skippedCases: allSkippedCases,
+  };
 }
 
-// 后台处理一批用例：先按需生成脚本，再逐个执行。
+async function createQueuedRunTasks(testCases: RunTargetTestCase[]) {
+  const now = new Date();
+  return prisma.$transaction(async (tx) => {
+    const tasks: RunTask[] = [];
+    const skippedCases: SkippedRunCase[] = [];
+
+    for (const testCase of testCases) {
+      // 条件更新放在事务内，避免并发点击把同一个用例重复提交。
+      const updated = await tx.testCase.updateMany({
+        where: {
+          id: testCase.id,
+          status: { in: SUBMITTABLE_STATUSES },
+        },
+        data: {
+          status: "queued",
+          lastRunAt: now,
+          lastFailureReason: null,
+        },
+      });
+
+      if (updated.count !== 1) {
+        const latestTestCase = await tx.testCase.findUniqueOrThrow({
+          where: { id: testCase.id },
+          select: {
+            id: true,
+            title: true,
+            status: true,
+          },
+        });
+
+        skippedCases.push(toSkippedRunCase(latestTestCase));
+        logRun("用例状态已变化，本次运行跳过", {
+          testCaseId: latestTestCase.id,
+          title: latestTestCase.title,
+          status: latestTestCase.status,
+        });
+        continue;
+      }
+
+      // 用户点击运行后立即落库，前端可以马上看到“排队中”的运行记录。
+      const runLog = await tx.runLog.create({
+        data: {
+          testCaseId: testCase.id,
+          status: "queued",
+          startedAt: now,
+        },
+      });
+
+      tasks.push({ runLogId: runLog.id, testCase });
+      logRun("创建运行日志并设置排队中", {
+        runLogId: runLog.id,
+        testCaseId: testCase.id,
+        title: testCase.title,
+        status: "queued",
+      });
+    }
+
+    return { tasks, skippedCases };
+  });
+}
+
+function enqueueRunBatch(tasks: RunTask[]) {
+  runBatchQueue.push(tasks);
+  logRun("运行批次进入全局队列", {
+    batchSize: tasks.length,
+    queueLength: runBatchQueue.length,
+  });
+  void drainRunBatchQueue();
+}
+
+async function drainRunBatchQueue() {
+  if (isRunBatchQueueDraining) {
+    return;
+  }
+
+  isRunBatchQueueDraining = true;
+  try {
+    while (runBatchQueue.length) {
+      const tasks = runBatchQueue.shift()!;
+      await processRuns(tasks);
+    }
+  } finally {
+    isRunBatchQueueDraining = false;
+  }
+}
+
+// 后台处理一批用例：批内生成和执行并行推进，批次之间由全局队列串行。
 async function processRuns(tasks: RunTask[]) {
   try {
     logRun("开始后台运行批次", {
@@ -98,12 +188,7 @@ async function processRuns(tasks: RunTask[]) {
     });
     const project = await getProject();
 
-    // 同一次 API 请求内，需要生成的用例先合并给 Claude，再逐个执行 Playwright。
-    await generateNeededScripts(tasks, project);
-
-    for (const task of tasks) {
-      await executeTask(task, project.baseUrl);
-    }
+    await processRunPipeline(tasks, project);
     logRun("后台运行批次结束", {
       runLogIds: tasks.map((task) => task.runLogId),
     });
@@ -114,6 +199,14 @@ async function processRuns(tasks: RunTask[]) {
   } finally {
     await cleanupRunWorkspace();
   }
+}
+
+// 批次内双流水线：已有脚本先执行，agent 生成完成的用例再追加执行。
+async function processRunPipeline(tasks: RunTask[], project: ProjectConfig) {
+  const readyQueue = createReadyTaskQueue();
+  const generationItems = await collectGenerationItems(tasks, project, readyQueue);
+
+  await Promise.all([executeReadyTaskQueue(readyQueue, project.baseUrl), generateNeededScripts(generationItems, project, readyQueue)]);
 }
 
 // 运行批次结束后清理 playwright-cli 页面探测产物，避免历史快照影响下一次生成。
@@ -127,9 +220,63 @@ async function cleanupRunWorkspace() {
   }
 }
 
-// 筛选需要生成的用例，并交给 Claude 一次性生成。
-async function generateNeededScripts(tasks: RunTask[], project: ProjectConfig) {
-  const generationItems: Array<{ task: RunTask; source: ScriptSource }> = [];
+function createReadyTaskQueue(): ReadyTaskQueue {
+  return {
+    items: [],
+    generationFinished: false,
+  };
+}
+
+function enqueueReadyTask(queue: ReadyTaskQueue, task: RunTask) {
+  queue.items.push(task);
+  wakeReadyTaskRunner(queue);
+}
+
+function wakeReadyTaskRunner(queue: ReadyTaskQueue) {
+  queue.wakeRunner?.();
+  queue.wakeRunner = undefined;
+}
+
+function waitForReadyTask(queue: ReadyTaskQueue) {
+  return new Promise<void>((resolve) => {
+    queue.wakeRunner = resolve;
+  });
+}
+
+async function executeReadyTaskQueue(queue: ReadyTaskQueue, baseUrl: string) {
+  while (true) {
+    const task = queue.items.shift();
+
+    if (task) {
+      await executeTaskWithIsolation(task, baseUrl);
+      continue;
+    }
+
+    if (queue.generationFinished) {
+      return;
+    }
+
+    await waitForReadyTask(queue);
+  }
+}
+
+async function executeTaskWithIsolation(task: RunTask, baseUrl: string) {
+  try {
+    await executeTask(task, baseUrl);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Playwright 执行异常";
+    logRun("用例执行异常", {
+      runLogId: task.runLogId,
+      testCaseId: task.testCase.id,
+      message,
+    });
+    await markFinished(task.runLogId, task.testCase.id, "failed", "", "", message);
+  }
+}
+
+// 筛选需要生成的用例；可复用脚本的用例直接进入执行队列。
+async function collectGenerationItems(tasks: RunTask[], project: ProjectConfig, readyQueue: ReadyTaskQueue) {
+  const generationItems: GenerationItem[] = [];
 
   for (const task of tasks) {
     const { testCase } = task;
@@ -140,6 +287,7 @@ async function generateNeededScripts(tasks: RunTask[], project: ProjectConfig) {
         testCaseId: testCase.id,
         status: testCase.status,
       });
+      enqueueReadyTask(readyQueue, task);
       continue;
     }
 
@@ -170,27 +318,37 @@ async function generateNeededScripts(tasks: RunTask[], project: ProjectConfig) {
     }
   }
 
-  // 本批次全都可以复用已有脚本时，跳过 Claude，直接进入执行阶段。
-  if (!generationItems.length) {
-    return;
-  }
+  return generationItems;
+}
 
+// 按最多 10 条一组调用 Claude；每个小批完成后把成功生成的用例追加到执行队列。
+async function generateNeededScripts(generationItems: GenerationItem[], project: ProjectConfig, readyQueue: ReadyTaskQueue) {
+  try {
+    for (const chunk of chunkByAgentGenerationBatchSize(generationItems)) {
+      await generateScriptChunk(chunk, project, readyQueue);
+    }
+  } finally {
+    readyQueue.generationFinished = true;
+    wakeReadyTaskRunner(readyQueue);
+  }
+}
+
+async function generateScriptChunk(generationItems: GenerationItem[], project: ProjectConfig, readyQueue: ReadyTaskQueue) {
   const generationTasks = generationItems.map((item) => item.task);
   await Promise.all(generationTasks.map((task) => updateStatus(task.runLogId, task.testCase.id, "generating")));
-  logRun("开始批量调用 agent 生成脚本", {
+  logRun("开始调用 agent 生成脚本小批次", {
     caseCount: generationItems.length,
     testCaseIds: generationItems.map((item) => item.source.id),
   });
 
   try {
-    // 这里是批量生成的关键：一次 Claude 调用生成本批次所有需要更新的 spec 文件。
     await generateScripts(
       generationItems.map((item) => item.source),
       project.baseUrl,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Claude Code 生成用例失败";
-    logRun("批量调用 agent 失败", {
+    logRun("调用 agent 生成脚本小批次失败", {
       testCaseIds: generationItems.map((item) => item.source.id),
       message,
     });
@@ -198,8 +356,14 @@ async function generateNeededScripts(tasks: RunTask[], project: ProjectConfig) {
     return;
   }
 
-  await Promise.all(generationItems.map((item) => saveGeneratedScript(item.task)));
-  logRun("批量 agent 生成脚本保存完成", {
+  for (const item of generationItems) {
+    const saved = await saveGeneratedScript(item.task);
+    if (saved) {
+      enqueueReadyTask(readyQueue, item.task);
+    }
+  }
+
+  logRun("agent 生成脚本小批次保存完成", {
     testCaseIds: generationItems.map((item) => item.source.id),
   });
 }
@@ -276,6 +440,7 @@ async function saveGeneratedScript(task: RunTask) {
       specPath,
       scriptLength: script.length,
     });
+    return true;
   } catch {
     logRun("agent 未生成目标 spec 文件", {
       runLogId: task.runLogId,
@@ -290,6 +455,7 @@ async function saveGeneratedScript(task: RunTask) {
       "",
       `Agent 未生成用例文件: ${task.testCase.id}.spec.ts`,
     );
+    return false;
   }
 }
 
@@ -340,7 +506,7 @@ async function getProject() {
 
 // 判断当前用例是否需要重新生成 Playwright 脚本。
 function shouldRegenerate(
-  previousStatus: TestCaseStatus,
+  previousStatus: TestCaseRunStatus,
   script: string | null,
   scriptGeneratedAt: Date | null,
   project: ProjectConfig,

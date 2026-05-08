@@ -16,7 +16,7 @@ import {
 } from "../api/testCases";
 import { isBusyStatus, StatusTag } from "../components/StatusTag";
 import { TestCaseModal } from "../components/TestCaseModal";
-import type { LatestRunDetail, TestCaseDetail, TestCaseGroup, TestCaseListItem, TestCasePayload } from "../types";
+import type { LatestRunDetail, RunRequestResult, TestCaseDetail, TestCaseGroup, TestCaseListItem, TestCasePayload } from "../types";
 
 export function TestCasePage() {
   const [items, setItems] = useState<TestCaseListItem[]>([]);
@@ -115,8 +115,8 @@ export function TestCasePage() {
 
   async function handleRun(item: TestCaseListItem) {
     try {
-      await runTestCase(item.id);
-      messageApi.success("已加入运行队列");
+      const result = await runTestCase(item.id);
+      showRunRequestMessage(result, "single");
       await loadData();
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "运行失败");
@@ -149,13 +149,39 @@ export function TestCasePage() {
     }
 
     try {
-      await runTestCases(selectedRowKeys);
-      messageApi.success("已加入运行队列");
+      const result = await runTestCases(selectedRowKeys);
+      showRunRequestMessage(result, "batch");
       setSelectedRowKeys([]);
       await loadData();
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "批量运行失败");
     }
+  }
+
+  function showRunRequestMessage(result: RunRequestResult, mode: "single" | "batch") {
+    const queuedCount = result.runIds.length;
+    const skippedCount = result.skippedCases.length;
+
+    if (mode === "single") {
+      if (queuedCount) {
+        messageApi.success("已加入运行队列");
+      } else {
+        messageApi.warning("该用例正在运行中，已跳过");
+      }
+      return;
+    }
+
+    if (queuedCount && skippedCount) {
+      messageApi.success(`已加入 ${queuedCount} 条，跳过 ${skippedCount} 条运行中的用例`);
+      return;
+    }
+
+    if (queuedCount) {
+      messageApi.success("已加入运行队列");
+      return;
+    }
+
+    messageApi.warning("选中的用例均在运行中，已跳过");
   }
 
   async function handleBatchDelete() {

@@ -1,5 +1,5 @@
 import { request } from "./client";
-import type { LatestRunDetail, TestCaseDetail, TestCaseListItem, TestCasePayload } from "../types";
+import type { LatestRunDetail, RunRequestResult, TestCaseDetail, TestCaseListItem, TestCasePayload } from "../types";
 
 export function fetchTestCases(title?: string) {
   const query = title ? `?title=${encodeURIComponent(title)}` : "";
@@ -35,7 +35,7 @@ export function deleteTestCase(id: string) {
 }
 
 export function runTestCase(id: string) {
-  return request<{ runId: number }>(`/test-cases/${id}/run`, {
+  return request<RunRequestResult>(`/test-cases/${id}/run`, {
     method: "POST",
   });
 }
@@ -45,7 +45,7 @@ export function deleteTestCases(ids: string[]) {
 }
 
 export function runTestCases(ids: string[]) {
-  return request<{ runIds: number[] }>(`/test-cases/${ids.join(",")}/run`, {
+  return request<RunRequestResult>(`/test-cases/${ids.join(",")}/run`, {
     method: "POST",
   });
 }

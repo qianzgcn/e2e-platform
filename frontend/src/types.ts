@@ -1,4 +1,5 @@
 export type TestCaseStatus = "not_run" | "queued" | "generating" | "running" | "success" | "failed";
+export type ActiveTestCaseStatus = Extract<TestCaseStatus, "queued" | "generating" | "running">;
 
 export type RunLogStatus = "queued" | "generating" | "running" | "success" | "failed";
 
@@ -80,4 +81,15 @@ export type LatestRunDetail = {
   runLog?: RunLog | null;
   reportUrl?: string;
   artifacts: RunArtifact[];
+};
+
+export type SkippedRunCase = {
+  id: string;
+  title: string;
+  status: ActiveTestCaseStatus;
+};
+
+export type RunRequestResult = {
+  runIds: number[];
+  skippedCases: SkippedRunCase[];
 };

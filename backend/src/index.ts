@@ -6,6 +6,7 @@ import { projectRouter } from "./routes/project.js";
 import { runLogsRouter } from "./routes/runLogs.js";
 import { testCaseGroupsRouter } from "./routes/testCaseGroups.js";
 import { testCasesRouter } from "./routes/testCases.js";
+import { recoverInterruptedRunsOnStartup } from "./services/interruptedRunRecoveryService.js";
 
 const app = express();
 
@@ -25,6 +26,12 @@ app.get("/api/health", (_req, res) => {
 
 const port = 3001;
 
-app.listen(port, () => {
-  console.log(`API server listening on http://localhost:${port}`);
-});
+async function startServer() {
+  await recoverInterruptedRunsOnStartup();
+
+  app.listen(port, () => {
+    console.log(`API server listening on http://localhost:${port}`);
+  });
+}
+
+void startServer();
