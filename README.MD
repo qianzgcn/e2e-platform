@@ -87,11 +87,11 @@ npm run test:generated:ui
 后端接口触发单个用例运行时，会调用：
 
 ```bash
-npm run test:generated -- --grep <用例id>
+npm run test:generated -- tests/generated/<用例id>.spec.ts
 ```
 
 ## 注意
 
 - 启动前请确认 MySQL 已运行，并按需修改 `backend/.env` 中的 `DATABASE_URL`。
 - 平时启动不需要执行 `prisma:migrate`，只有初始化数据库或改表结构时才需要。
-- 初版 AI agent 会生成默认 Playwright 脚本，后续可替换为真实 agent。
+- 生成的脚本和运行结果在 `backend/tests/generated`、`backend/test-results` 下，属于运行产物，不需要提交仓库。

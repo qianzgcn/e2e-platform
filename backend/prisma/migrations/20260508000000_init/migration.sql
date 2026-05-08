@@ -10,25 +10,53 @@ CREATE TABLE `Project` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
-CREATE TABLE `TestCase` (
+CREATE TABLE `ProjectVariable` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `projectId` INTEGER NOT NULL,
+    `name` VARCHAR(191) NOT NULL,
+    `value` TEXT NOT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    INDEX `ProjectVariable_projectId_idx`(`projectId`),
+    UNIQUE INDEX `ProjectVariable_projectId_name_key`(`projectId`, `name`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `TestCaseGroup` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `name` VARCHAR(191) NOT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    UNIQUE INDEX `TestCaseGroup_name_key`(`name`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `TestCase` (
+    `id` VARCHAR(191) NOT NULL,
     `title` VARCHAR(191) NOT NULL,
-    `groupName` VARCHAR(191) NOT NULL,
+    `groupId` INTEGER NOT NULL,
     `naturalLanguage` TEXT NOT NULL,
     `playwrightScript` LONGTEXT NULL,
     `status` ENUM('not_run', 'queued', 'generating', 'running', 'success', 'failed') NOT NULL DEFAULT 'not_run',
     `lastFailureReason` TEXT NULL,
     `lastRunAt` DATETIME(3) NULL,
+    `scriptGeneratedAt` DATETIME(3) NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `editedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
 
+    INDEX `TestCase_groupId_idx`(`groupId`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
 CREATE TABLE `RunLog` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `testCaseId` INTEGER NOT NULL,
+    `testCaseId` VARCHAR(191) NOT NULL,
     `status` ENUM('queued', 'generating', 'running', 'success', 'failed') NOT NULL,
     `failureReason` TEXT NULL,
     `stdout` LONGTEXT NULL,
@@ -39,6 +67,12 @@ CREATE TABLE `RunLog` (
     INDEX `RunLog_testCaseId_idx`(`testCaseId`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- AddForeignKey
+ALTER TABLE `ProjectVariable` ADD CONSTRAINT `ProjectVariable_projectId_fkey` FOREIGN KEY (`projectId`) REFERENCES `Project`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE `TestCase` ADD CONSTRAINT `TestCase_groupId_fkey` FOREIGN KEY (`groupId`) REFERENCES `TestCaseGroup`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE `RunLog` ADD CONSTRAINT `RunLog_testCaseId_fkey` FOREIGN KEY (`testCaseId`) REFERENCES `TestCase`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
