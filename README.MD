@@ -83,7 +83,9 @@ docker build \
 cp deploy.env.example deploy.env
 ```
 
-请在 `deploy.env` 中填写 `DATABASE_URL`，以及 Claude Code 使用 deepseek-v4-flash 所需的环境变量。镜像不会内置任何密钥。
+请在 `deploy.env` 中填写 `DATABASE_URL`，以及 Claude Code 使用 deepseek-v4-flash 所需的非密钥类环境变量。镜像不会内置任何密钥。
+
+`ANTHROPIC_AUTH_TOKEN` 不写入 `deploy.env`，部署时通过 `docker run -e` 单独传入，避免密钥被误复制或误提交。
 
 如果 MySQL 也是 Docker 容器，推荐把两个容器加入同一个网络，并在 `DATABASE_URL` 里使用 MySQL 容器名，例如：
 
@@ -102,6 +104,7 @@ docker run -d \
   --network e2e-net \
   -p 9099:9099 \
   --env-file ./deploy.env \
+  -e ANTHROPIC_AUTH_TOKEN=your-token \
   e2e-platform
 ```
 
