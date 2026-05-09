@@ -6,6 +6,4 @@ if [ -z "${DATABASE_URL:-}" ]; then
   exit 1
 fi
 
-npx --no-install prisma migrate deploy
-
 exec node dist/index.js

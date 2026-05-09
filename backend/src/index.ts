@@ -8,6 +8,7 @@ import { runLogsRouter } from "./routes/runLogs.js";
 import { testCaseGroupsRouter } from "./routes/testCaseGroups.js";
 import { testCasesRouter } from "./routes/testCases.js";
 import { getFrontendStaticDir, getServerPort } from "./serverConfig.js";
+import { initializeDatabase } from "./services/databaseInitService.js";
 import { recoverInterruptedRunsOnStartup } from "./services/interruptedRunRecoveryService.js";
 
 const app = express();
@@ -43,6 +44,7 @@ if (existsSync(frontendIndexFile)) {
 }
 
 async function startServer() {
+  await initializeDatabase();
   await recoverInterruptedRunsOnStartup();
 
   app.listen(port, () => {

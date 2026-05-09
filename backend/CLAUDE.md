@@ -10,10 +10,16 @@
 
 ## 工作流程
 
-1. 使用 `playwright-cli` 打开真实页面并探测元素，再选择 locator和编写用例。
+1. 使用已预装的 `playwright-cli` 打开真实页面并探测元素，再选择 locator和编写用例。
 2. 每个 `testCase` 生成一个文件：`{outputDir}/{id}.spec.ts`。
 3. 先用 `baseUrl` 和自然语言步骤确定入口页面。导航：使用完整 URL；相对页面先按 `baseUrl` 解析，禁止 `page.goto('/')`。
 4. 直接创建或覆盖目标文件，不要只在终端输出代码。
+
+## 环境约束
+
+- 当前环境已经预装 `playwright-cli`、Playwright 和 Chromium，直接使用 `playwright-cli ...`。
+- 禁止执行任何安装命令，包括 `npm install`、`npx playwright install`、`npx --yes`、`apt-get`。
+- 页面探测要克制：优先使用 `playwright-cli snapshot` 和少量 `eval`，不要反复读取整页文本或大段 DOM。
 
 ## 输出格式
 
