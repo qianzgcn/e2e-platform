@@ -1,4 +1,6 @@
-const apiBaseUrl = "http://localhost:3001/api";
+import { getApiBaseUrl } from "./url";
+
+const apiBaseUrl = getApiBaseUrl();
 
 export async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
@@ -20,4 +22,3 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
 
   return response.json() as Promise<T>;
 }
-

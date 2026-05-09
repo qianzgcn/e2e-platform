@@ -57,6 +57,68 @@ npm run dev
 http://localhost:5173
 ```
 
+## Docker 部署
+
+Docker 部署会把前端静态资源、后端 API、Claude Code CLI 和 Playwright 浏览器打包到同一个容器里，数据库仍使用外部 MySQL。
+
+镜像基于 `node:22-bookworm-slim` 构建，运行阶段只安装生产依赖和 Chromium，避免把源码、开发依赖和本地运行产物打进最终镜像。
+
+构建镜像：
+
+```bash
+docker build -t e2e-platform .
+```
+
+如果 npm registry 访问不稳定，可以在构建时指定镜像源：
+
+```bash
+docker build \
+  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
+  -t e2e-platform .
+```
+
+准备运行环境变量：
+
+```bash
+cp deploy.env.example deploy.env
+```
+
+请在 `deploy.env` 中填写 `DATABASE_URL`，以及 Claude Code 使用 deepseek-v4-flash 所需的环境变量。镜像不会内置任何密钥。
+
+如果 MySQL 也是 Docker 容器，推荐把两个容器加入同一个网络，并在 `DATABASE_URL` 里使用 MySQL 容器名，例如：
+
+```env
+DATABASE_URL=mysql://root:your_password@e2e-mysql:3306/e2e_platform
+```
+
+注意：`docker run --env-file` 不会自动去掉变量值外层的双引号，`deploy.env` 里不要写成 `DATABASE_URL="mysql://..."`。
+
+启动容器：
+
+```bash
+docker run -d \
+  --name e2e-platform \
+  --restart unless-stopped \
+  --network e2e-net \
+  -p 9099:9099 \
+  --env-file ./deploy.env \
+  e2e-platform
+```
+
+如果容器需要访问宿主机上的 MySQL 或被测系统，Linux 环境可以加上：
+
+```bash
+--add-host=host.docker.internal:host-gateway
+```
+
+部署后访问：
+
+```text
+http://localhost:9099
+```
+
+容器启动时会先执行 `prisma migrate deploy`，迁移成功后再启动 Web 服务。
+
 ## 运行生成的 Playwright 用例
 
 生成的自动化用例统一放在：

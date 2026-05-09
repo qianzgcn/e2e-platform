@@ -1,0 +1,17 @@
+.git
+.codex
+.agents
+**/node_modules
+**/dist
+backend/.env
+deploy.env
+deploy.env.*
+!deploy.env.example
+backend/.playwright
+backend/test-results
+backend/tests/generated
+frontend/.env
+frontend/.env.*
+frontend/node_modules
+npm-debug.log*
+.DS_Store

@@ -2,6 +2,7 @@ import { DeleteOutlined, FileTextOutlined, PlayCircleOutlined, PlusOutlined } fr
 import { Button, Descriptions, Empty, Input, Modal, Space, Table, Tabs, Tooltip, Typography, message } from "antd";
 import type { ColumnType } from "antd/es/table";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { toBackendUrl } from "../api/url";
 import { createTestCaseGroup, fetchTestCaseGroups } from "../api/testCaseGroups";
 import {
   createTestCase,
@@ -432,7 +433,7 @@ export function TestCasePage() {
                 key: "report",
                 label: "测试报告",
                 children: runDetail.reportUrl ? (
-                  <iframe title="Playwright HTML 报告" src={toApiUrl(runDetail.reportUrl)} className="h-[560px] w-full rounded border border-gray-200" />
+                  <iframe title="Playwright HTML 报告" src={toBackendUrl(runDetail.reportUrl)} className="h-[560px] w-full rounded border border-gray-200" />
                 ) : (
                   <Empty description="暂无测试报告" />
                 ),
@@ -456,10 +457,6 @@ function LogBlock({ title, value }: { title: string; value?: string | null }) {
       </pre>
     </div>
   );
-}
-
-function toApiUrl(url: string) {
-  return url.startsWith("http") ? url : `http://localhost:3001${url}`;
 }
 
 const statusFilters: ColumnType<TestCaseListItem>["filters"] = [

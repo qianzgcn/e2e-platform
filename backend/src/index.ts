@@ -1,11 +1,13 @@
 import cors from "cors";
 import express from "express";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { projectRouter } from "./routes/project.js";
 import { runLogsRouter } from "./routes/runLogs.js";
 import { testCaseGroupsRouter } from "./routes/testCaseGroups.js";
 import { testCasesRouter } from "./routes/testCases.js";
+import { getFrontendStaticDir, getServerPort } from "./serverConfig.js";
 import { recoverInterruptedRunsOnStartup } from "./services/interruptedRunRecoveryService.js";
 
 const app = express();
@@ -24,7 +26,21 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-const port = 3001;
+const port = getServerPort();
+const frontendStaticDir = getFrontendStaticDir();
+const frontendIndexFile = path.join(frontendStaticDir, "index.html");
+
+if (existsSync(frontendIndexFile)) {
+  app.use(express.static(frontendStaticDir));
+  app.use((req, res, next) => {
+    if (req.method !== "GET" || req.path.startsWith("/api") || req.path.startsWith("/test-results")) {
+      next();
+      return;
+    }
+
+    res.sendFile(frontendIndexFile);
+  });
+}
 
 async function startServer() {
   await recoverInterruptedRunsOnStartup();
