@@ -11,14 +11,15 @@
 ## 工作流程
 
 1. 使用已预装的 `playwright-cli` 打开真实页面并探测元素，再选择 locator和编写用例。
-2. 每个 `testCase` 生成一个文件：`{outputDir}/{id}.spec.ts`。
-3. 先用 `baseUrl` 和自然语言步骤确定入口页面。导航：使用完整 URL；相对页面先按 `baseUrl` 解析，禁止 `page.goto('/')`。
-4. 直接创建或覆盖目标文件，不要只在终端输出代码。
+2. 如果探测登录页时，那么就必须读取验证码，打开登录页后执行 `playwright-cli cookie-get _COOKIE_KEY_CAPTCHA_`；没有值再执行一次，如果还是为空就直接失败。
+3. 每个 `testCase` 生成一个文件：`{outputDir}/{id}.spec.ts`。
+4. 先用 `baseUrl` 和自然语言步骤确定入口页面。导航：使用完整 URL；相对页面先按 `baseUrl` 解析，禁止 `page.goto('/')`。
+5. 直接创建或覆盖目标文件，不要只在终端输出代码。
 
 ## 环境约束
 
 - 当前环境已经预装 `playwright-cli`、Playwright 和 Chromium，直接使用 `playwright-cli ...`。
-- 禁止执行任何安装命令，包括 `npm install`、`npx playwright install`、`npx --yes`、`apt-get`。
+- 如果 `playwright-cli` 失败，停止生成并报告原始错误。
 - 页面探测要克制：优先使用 `playwright-cli snapshot` 和少量 `eval`，不要反复读取整页文本或大段 DOM。
 
 ## 输出格式
@@ -33,33 +34,13 @@
 
 ## 登录
 
-- 自然语言用例需要登录时，必须导入：`import { login } from '../utils/auth';`。
-- 调用 `login(page, { baseUrl, username, password })`；`baseUrl` 使用输入的 `baseUrl`，`username` 和 `password` 使用自然语言里的账号和密码。
-- 登录需要访问 `baseUrl + /login`，并完成用户名、密码、验证码（从cookies里的'_COOKIE_KEY_CAPTCHA_'获取）填写和提交。
-- 用例里不要再手写登录页跳转、验证码读取、表单填写或点击登录。
+- 自然语言用例需要登录时，生成后的用例必须导入：`import { login } from '../utils/auth';`。
+- 生成后的用例里不用再写登录相关逻辑，直接调用 `login(page, { baseUrl, username, password })`；`baseUrl` 使用输入的 `baseUrl`，`username` 和 `password` 使用自然语言里的账号和密码。
+- 登录需要访问 `baseUrl + /login`，并完成用户名、密码、验证码填写和提交。
 
-登录示例片段：
+自然语言用例和最终生成的脚本示例：
 
-```ts
-import { test, expect } from '@playwright/test';
-import { login } from '../utils/auth';
-
-test('登录示例', async ({ page }) => {
-  // 步骤 1：使用账号密码登录
-  await login(page, {
-    baseUrl: 'https://example.com',
-    username: '自然语言中的用户名',
-    password: '自然语言中的密码',
-  });
-
-  // 断言 1：登录成功
-  await expect(page).toHaveURL(/\/dashboard/);
-});
-```
-
-## 输出模板
-
-自然语言用例输入格式：
+自然语言用例输入示例：
 ```text
 {
   "baseUrl": "https://demo.playwright.dev/todomvc/#/",
@@ -68,36 +49,40 @@ test('登录示例', async ({ page }) => {
     {
       "id": "xxxxx",
       "title": "新增待办",
-      "naturalLanguage": "1. 访问待办首页\n2. 添加用例 \"学习一小时\"\n3. 验证用例出现在列表中。\n4. 切换到Completed，该用例不可见"
+      "naturalLanguage": "1. 使用账号: ${username}，密码 ${password}登录 2. 登陆后切换项目为“001” 3. 项目切换完成后点击右上角“项目管理” 4. 查看是否包含项目“001”"
     }
   ]
 }
 ```
 
-期望生成：
+期望生成的脚本：
 
 ```ts
 import { test, expect } from '@playwright/test';
+import { login } from '../utils/auth';
 
-test('删除待办', async ({ page }) => {
-  // 步骤 1：访问待办应用首页
-  await page.goto('https://demo.playwright.dev/todomvc/#/');
+test('验证项目查看', async ({ page }) => {
+  // 步骤 1：使用账号密码登录
+  await login(page, {
+    baseUrl: 'http://113.44.81.150:8080',
+    username: 'auto_test',
+    password: 'Auto_test1',
+  });
 
-  // 断言 1：页面标题正确
-  await expect(page).toHaveTitle(/React • TodoMVC/);
+  // 断言 1：登录成功，跳转到 dashboard
+  await expect(page).toHaveURL(/\/dashboard/);
 
-  // 步骤 2：新增一个待删除的待办
-  await page.getByRole('textbox', { name: 'What needs to be done?' }).fill('学习一小时');
-  await page.getByRole('textbox', { name: 'What needs to be done?' }).press('Enter');
+  // 步骤 2：切换项目为"001"
+  await page.getByRole('combobox').click();
+  await page.getByRole('option', { name: '001' }).click();
 
-  // 断言 2：待办已出现在列表中
-  await expect(page.getByTestId('todo-item')).toContainText('学习一小时');
+  // 步骤 3：点击右上角"项目管理"
+  await page.getByRole('link', { name: /项目管理/ }).click();
 
-  // 步骤 3：删除该待办
-  await page.getByTestId('todo-item').hover();
-  await page.getByRole('button', { name: 'Delete' }).click();
+  // 断言 2：进入项目列表页面
+  await expect(page).toHaveURL(/\/project\/list/);
 
-  // 断言 3：待办已从列表中删除
-  await expect(page.getByTestId('todo-item')).toHaveCount(0);
+  // 断言 3：项目列表中包含项目"001"
+  await expect(page.locator('main').getByText('001', { exact: true })).toBeVisible();
 });
 ```

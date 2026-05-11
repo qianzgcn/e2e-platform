@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess, type SpawnOptionsWithoutStdio } from "node:child_process";
 
 const CLAUDE_COMMAND = "claude";
-const CLAUDE_TIMEOUT = 5 * 60 * 1000;
+const CLAUDE_TIMEOUT = 10 * 60 * 1000;
 const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
 
 const CLAUDE_ARGS = [

@@ -40,6 +40,11 @@ export default defineConfig({
     trace: "off",
     screenshot: "off",
     video: "retain-on-failure",
+
+    // 容器内通常以 root 运行 Chromium，关闭 sandbox 避免启动失败。
+    launchOptions: {
+      chromiumSandbox: false,
+    },
   },
 
   projects: [

@@ -12,6 +12,7 @@
       "Bash(playwright-cli:*)",
       "Bash(npx:*)",
       "Bash(npm:*)",
+      "Bash(ls:*)",
       "Bash(node:*)",
       "Bash(mkdir:*)"
     ]
