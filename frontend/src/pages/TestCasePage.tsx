@@ -20,6 +20,8 @@ import { isBusyStatus, StatusTag } from "../components/StatusTag";
 import { TestCaseModal } from "../components/TestCaseModal";
 import type { LatestRunDetail, RunRequestResult, StopRunResult, TestCaseDetail, TestCaseGroup, TestCaseListItem, TestCasePayload } from "../types";
 
+const ACTIVE_CASE_POLL_INTERVAL_MS = 5000;
+
 export function TestCasePage() {
   const [items, setItems] = useState<TestCaseListItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -38,23 +40,39 @@ export function TestCasePage() {
   const hasBusyCase = useMemo(() => items.some((item) => isBusyStatus(item.status)), [items]);
   const groupFilters = useMemo(() => toFilters(items.map((item) => item.groupName)), [items]);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadTestCases = useCallback(async (showLoading = true) => {
+    if (showLoading) {
+      setLoading(true);
+    }
+
     try {
-      const [testCases, testCaseGroups] = await Promise.all([fetchTestCases(titleKeyword), fetchTestCaseGroups()]);
+      const testCases = await fetchTestCases(titleKeyword);
       setItems(testCases);
-      setGroups(testCaseGroups);
       setSelectedRowKeys((current) => current.filter((id) => testCases.some((item) => item.id === id)));
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "加载用例失败");
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   }, [messageApi, titleKeyword]);
 
+  const loadGroups = useCallback(async () => {
+    try {
+      setGroups(await fetchTestCaseGroups());
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "加载分组失败");
+    }
+  }, [messageApi]);
+
   useEffect(() => {
-    void loadData();
-  }, [loadData]);
+    void loadTestCases();
+  }, [loadTestCases]);
+
+  useEffect(() => {
+    void loadGroups();
+  }, [loadGroups]);
 
   useEffect(() => {
     if (!hasBusyCase) {
@@ -62,11 +80,11 @@ export function TestCasePage() {
     }
 
     const timer = window.setInterval(() => {
-      void loadData();
-    }, 2000);
+      void loadTestCases(false);
+    }, ACTIVE_CASE_POLL_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
-  }, [hasBusyCase, loadData]);
+  }, [hasBusyCase, loadTestCases]);
 
   async function openCreateModal() {
     setEditingCase(null);
@@ -94,7 +112,7 @@ export function TestCasePage() {
         await createTestCase(data);
       }
       setModalOpen(false);
-      await loadData();
+      await loadTestCases();
       messageApi.success("用例已保存");
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "保存用例失败");
@@ -119,7 +137,7 @@ export function TestCasePage() {
     try {
       const result = await runTestCase(item.id);
       showRunRequestMessage(result, "single");
-      await loadData();
+      await loadTestCases();
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "运行失败");
     }
@@ -135,7 +153,7 @@ export function TestCasePage() {
       async onOk() {
         try {
           await deleteTestCase(item.id);
-          await loadData();
+          await loadTestCases();
           messageApi.success("用例已删除");
         } catch (error) {
           messageApi.error(error instanceof Error ? error.message : "删除用例失败");
@@ -154,7 +172,7 @@ export function TestCasePage() {
       const result = await runTestCases(selectedRowKeys);
       showRunRequestMessage(result, "batch");
       setSelectedRowKeys([]);
-      await loadData();
+      await loadTestCases();
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "批量运行失败");
     }
@@ -165,7 +183,7 @@ export function TestCasePage() {
       try {
         const result = await stopTestCase(item.id);
         showStopRequestMessage(result);
-        await loadData();
+        await loadTestCases();
       } catch (error) {
         messageApi.error(error instanceof Error ? error.message : "停止用例失败");
       }
@@ -241,7 +259,7 @@ export function TestCasePage() {
         try {
           await deleteTestCases(selectedRowKeys);
           setSelectedRowKeys([]);
-          await loadData();
+          await loadTestCases();
           messageApi.success("用例已删除");
         } catch (error) {
           messageApi.error(error instanceof Error ? error.message : "批量删除失败");
