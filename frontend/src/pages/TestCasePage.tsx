@@ -1,5 +1,5 @@
 import { DeleteOutlined, FileTextOutlined, PlayCircleOutlined, PlusOutlined, StopOutlined } from "@ant-design/icons";
-import { Button, Descriptions, Empty, Input, Modal, Space, Table, Tabs, Tooltip, Typography, message } from "antd";
+import { Button, Descriptions, Empty, Input, Modal, Space, Table, Tabs, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnType } from "antd/es/table";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toBackendUrl } from "../api/url";
@@ -371,6 +371,17 @@ export function TestCasePage() {
                 ) : (
                   <StatusTag status={record.status} />
                 ),
+            },
+            {
+              title: "需生成脚本",
+              dataIndex: "scriptNeedsGeneration",
+              width: 120,
+              filters: [
+                { text: "是", value: true },
+                { text: "否", value: false },
+              ],
+              onFilter: (value, record) => record.scriptNeedsGeneration === value,
+              render: (value: boolean) => <Tag color={value ? "gold" : "default"}>{value ? "是" : "否"}</Tag>,
             },
             {
               title: "最近运行时间",

@@ -5,6 +5,7 @@ import { cleanupPlaywrightCliWorkspace } from "./cleanupService.js";
 import { prisma } from "../prisma.js";
 import { runPlaywright } from "./runnerService.js";
 import { chunkByAgentGenerationBatchSize } from "./runBatch.js";
+import { shouldGenerateScript } from "./testCaseScriptGeneration.js";
 import {
   ACTIVE_STATUSES,
   SUBMITTABLE_STATUSES,
@@ -19,14 +20,12 @@ type SharedRunningStatus = "queued" | "generating" | "running" | "success" | "fa
 
 type ProjectConfig = {
   baseUrl: string;
-  updatedAt: Date;
   variables: ProjectVariable[];
 };
 
 type ProjectVariable = {
   name: string;
   value: string;
-  updatedAt: Date;
 };
 
 type RunTargetTestCase = {
@@ -35,6 +34,7 @@ type RunTargetTestCase = {
   naturalLanguage: string;
   status: TestCaseRunStatus;
   playwrightScript: string | null;
+  scriptNeedsGeneration: boolean;
   scriptGeneratedAt: Date | null;
 };
 
@@ -367,11 +367,17 @@ async function collectGenerationItems(tasks: RunTask[], project: ProjectConfig, 
   for (const task of tasks) {
     const { testCase } = task;
 
-    if (!shouldRegenerate(testCase.status, testCase.playwrightScript, testCase.scriptGeneratedAt, project)) {
+    if (
+      !shouldGenerateScript({
+        scriptNeedsGeneration: testCase.scriptNeedsGeneration,
+        playwrightScript: testCase.playwrightScript,
+      })
+    ) {
       logRun("复用已有脚本，跳过 agent 生成", {
         runLogId: task.runLogId,
         testCaseId: testCase.id,
         status: testCase.status,
+        scriptNeedsGeneration: testCase.scriptNeedsGeneration,
       });
       enqueueReadyTask(readyQueue, task);
       continue;
@@ -392,6 +398,8 @@ async function collectGenerationItems(tasks: RunTask[], project: ProjectConfig, 
         runLogId: task.runLogId,
         testCaseId: testCase.id,
         title: testCase.title,
+        scriptNeedsGeneration: testCase.scriptNeedsGeneration,
+        hasScript: Boolean(testCase.playwrightScript),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "变量解析失败";
@@ -568,6 +576,7 @@ async function saveGeneratedScript(task: RunTask) {
         data: {
           playwrightScript: script,
           scriptGeneratedAt: task.testCase.scriptGeneratedAt,
+          scriptNeedsGeneration: false,
         },
       });
       return updated.count === 1;
@@ -621,6 +630,7 @@ async function findRunTargets(testCaseIds: string[]) {
       naturalLanguage: true,
       status: true,
       playwrightScript: true,
+      scriptNeedsGeneration: true,
       scriptGeneratedAt: true,
     },
   })) as RunTargetTestCase[];
@@ -649,22 +659,6 @@ async function getProject() {
     variableCount: project.variables.length,
   });
   return project;
-}
-
-// 判断当前用例是否需要重新生成 Playwright 脚本。
-function shouldRegenerate(
-  previousStatus: TestCaseRunStatus,
-  script: string | null,
-  scriptGeneratedAt: Date | null,
-  project: ProjectConfig,
-) {
-  // 上次没成功、没有脚本、没有生成时间，都说明不能安全复用旧脚本。
-  if (previousStatus !== "success" || !script || !scriptGeneratedAt) {
-    return true;
-  }
-
-  // 配置按整体保存，project.updatedAt 能覆盖变量被删除后没有行级 updatedAt 的情况。
-  return project.updatedAt > scriptGeneratedAt || project.variables.some((variable) => variable.updatedAt > scriptGeneratedAt);
 }
 
 // 解析自然语言用例里的 ${变量名} 占位符。

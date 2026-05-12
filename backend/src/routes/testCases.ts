@@ -2,6 +2,7 @@ import { Router } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "../prisma.js";
 import { getLatestArtifacts } from "../services/artifactService.js";
+import { resolveScriptGenerationOnSave } from "../services/testCaseScriptGeneration.js";
 import { runTestCase, runTestCases, stopTestCaseRun } from "../services/testCaseRunService.js";
 
 export const testCasesRouter = Router();
@@ -14,15 +15,17 @@ type TestCaseListRow = {
     name: string;
   };
   status: string;
+  scriptNeedsGeneration: boolean;
   lastFailureReason: string | null;
   lastRunAt: Date | null;
   createdAt: Date;
   editedAt: Date;
 };
 
-type ExistingScriptTestCase = {
+type ExistingTestCaseForUpdate = {
+  naturalLanguage: string;
   playwrightScript: string | null;
-  scriptGeneratedAt: Date | null;
+  scriptNeedsGeneration: boolean;
 };
 
 testCasesRouter.get("/", async (_req, res) => {
@@ -46,6 +49,7 @@ testCasesRouter.get("/", async (_req, res) => {
         },
       },
       status: true,
+      scriptNeedsGeneration: true,
       lastFailureReason: true,
       lastRunAt: true,
       createdAt: true,
@@ -60,6 +64,7 @@ testCasesRouter.get("/", async (_req, res) => {
       groupId: testCase.groupId,
       groupName: testCase.group.name,
       status: testCase.status,
+      scriptNeedsGeneration: testCase.scriptNeedsGeneration,
       lastFailureReason: testCase.lastFailureReason,
       lastRunAt: testCase.lastRunAt,
       createdAt: testCase.createdAt,
@@ -87,6 +92,7 @@ testCasesRouter.get("/:id", async (req, res) => {
     groupName: testCase.group.name,
     naturalLanguage: testCase.naturalLanguage,
     playwrightScript: testCase.playwrightScript,
+    scriptNeedsGeneration: testCase.scriptNeedsGeneration,
     status: testCase.status,
     lastFailureReason: testCase.lastFailureReason,
     lastRunAt: testCase.lastRunAt,
@@ -111,8 +117,7 @@ testCasesRouter.get("/:id/latest-run", async (req, res) => {
 });
 
 testCasesRouter.post("/", async (req, res) => {
-  const { title, groupId, naturalLanguage, playwrightScript } = req.body;
-  const script = getSavedScript(playwrightScript);
+  const { title, groupId, naturalLanguage } = req.body;
 
   if (!title || !groupId || !naturalLanguage) {
     res.status(400).json({ message: "标题、分组和测试步骤必填" });
@@ -125,8 +130,7 @@ testCasesRouter.post("/", async (req, res) => {
       title,
       groupId,
       naturalLanguage,
-      playwrightScript: script,
-      scriptGeneratedAt: script ? new Date() : null,
+      scriptNeedsGeneration: true,
       editedAt: new Date(),
     },
     include: { group: true },
@@ -140,8 +144,8 @@ testCasesRouter.post("/", async (req, res) => {
 
 testCasesRouter.put("/:id", async (req, res) => {
   const id = req.params.id;
-  const { title, groupId, naturalLanguage, playwrightScript } = req.body;
-  const script = getSavedScript(playwrightScript);
+  const { title, groupId, naturalLanguage } = req.body;
+  const requestedScriptNeedsGeneration = getScriptNeedsGeneration(req.body.scriptNeedsGeneration);
 
   if (!title || !groupId || !naturalLanguage) {
     res.status(400).json({ message: "标题、分组和测试步骤必填" });
@@ -151,24 +155,40 @@ testCasesRouter.put("/:id", async (req, res) => {
   const existing = (await prisma.testCase.findUnique({
     where: { id },
     select: {
+      naturalLanguage: true,
       playwrightScript: true,
-      scriptGeneratedAt: true,
+      scriptNeedsGeneration: true,
     },
-  })) as ExistingScriptTestCase | null;
+  })) as ExistingTestCaseForUpdate | null;
   if (!existing) {
     res.status(404).json({ message: "用例不存在" });
     return;
   }
 
-  const scriptChanged = script !== existing.playwrightScript;
+  const scriptGeneration = resolveScriptGenerationOnSave(existing, {
+    naturalLanguage,
+    scriptNeedsGeneration: requestedScriptNeedsGeneration,
+  });
   const testCase = await prisma.testCase.update({
     where: { id },
     data: {
       title,
       groupId,
       naturalLanguage,
-      playwrightScript: script,
-      scriptGeneratedAt: scriptChanged ? (script ? new Date() : null) : existing.scriptGeneratedAt,
+      scriptNeedsGeneration: scriptGeneration.scriptNeedsGeneration,
+      ...(scriptGeneration.clearScript
+        ? {
+            playwrightScript: null,
+            scriptGeneratedAt: null,
+          }
+        : {}),
+      ...(scriptGeneration.resetRunState
+        ? {
+            status: "not_run",
+            lastRunAt: null,
+            lastFailureReason: null,
+          }
+        : {}),
       editedAt: new Date(),
     },
     include: { group: true },
@@ -209,10 +229,6 @@ function parseIds(value: string) {
   return value.split(",").filter(Boolean);
 }
 
-function getSavedScript(value: unknown) {
-  if (typeof value !== "string" || !value.trim()) {
-    return null;
-  }
-
-  return value;
+function getScriptNeedsGeneration(value: unknown) {
+  return typeof value === "boolean" ? value : undefined;
 }

@@ -60,6 +60,7 @@ model TestCase {
   group             TestCaseGroup  @relation(fields: [groupId], references: [id])
   naturalLanguage   String         @db.Text
   playwrightScript  String?        @db.LongText
+  scriptNeedsGeneration Boolean    @default(true)
   status            TestCaseStatus @default(not_run)
   lastFailureReason String?        @db.Text
   lastRunAt         DateTime?

@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS `TestCase` (
   `groupId` INTEGER NOT NULL,
   `naturalLanguage` TEXT NOT NULL,
   `playwrightScript` LONGTEXT NULL,
+  `scriptNeedsGeneration` BOOLEAN NOT NULL DEFAULT TRUE,
   `status` ENUM('not_run', 'queued', 'generating', 'running', 'success', 'failed') NOT NULL DEFAULT 'not_run',
   `lastFailureReason` TEXT NULL,
   `lastRunAt` DATETIME(3) NULL,

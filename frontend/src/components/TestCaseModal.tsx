@@ -1,5 +1,5 @@
 import { CodeOutlined, DownOutlined, UpOutlined } from "@ant-design/icons";
-import { Button, Col, Form, Input, Modal, Row, Select, Space } from "antd";
+import { Button, Col, Form, Input, Modal, Row, Select, Space, Switch } from "antd";
 import { useEffect, useState } from "react";
 import type { TestCaseDetail, TestCaseGroup, TestCasePayload } from "../types";
 
@@ -20,6 +20,7 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [showScript, setShowScript] = useState(false);
   const isEdit = Boolean(initialValue);
+  const hasScript = Boolean(initialValue?.playwrightScript?.trim());
 
   useEffect(() => {
     if (!open) {
@@ -33,9 +34,10 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
       title: initialValue?.title ?? "",
       groupId: initialValue?.groupId,
       naturalLanguage: initialValue?.naturalLanguage ?? "",
+      scriptNeedsGeneration: hasScript ? initialValue?.scriptNeedsGeneration ?? false : true,
       playwrightScript: initialValue?.playwrightScript ?? "",
     });
-  }, [form, initialValue, open]);
+  }, [form, hasScript, initialValue, open]);
 
   async function handleOk() {
     const values = await form.validateFields();
@@ -118,6 +120,10 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
               />
             </Form.Item>
 
+            <Form.Item name="scriptNeedsGeneration" label="是否新生成脚本用例" valuePropName="checked">
+              <Switch checkedChildren="是" unCheckedChildren="否" disabled={!hasScript} />
+            </Form.Item>
+
             <Space>
               <Button
                 icon={<CodeOutlined />}
@@ -132,7 +138,7 @@ export function TestCaseModal({ open, loading, initialValue, groups, onCancel, o
           {showScript ? (
             <Col span={12} className="test-case-script-column">
               <Form.Item name="playwrightScript" label="Playwright 脚本" className="test-case-script-item">
-                <Input.TextArea className="code-editor" placeholder="AI agent 生成后会写入这里，也可以手动编辑" />
+                <Input.TextArea readOnly className="code-editor" placeholder="AI agent 生成后会写入这里" />
               </Form.Item>
             </Col>
           ) : null}

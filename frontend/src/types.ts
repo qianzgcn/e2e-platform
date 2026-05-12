@@ -9,6 +9,7 @@ export type TestCaseListItem = {
   groupId: number;
   groupName: string;
   status: TestCaseStatus;
+  scriptNeedsGeneration: boolean;
   lastFailureReason?: string | null;
   lastRunAt?: string | null;
   createdAt?: string | null;
@@ -24,6 +25,7 @@ export type TestCasePayload = {
   title: string;
   groupId: number;
   naturalLanguage: string;
+  scriptNeedsGeneration?: boolean;
   playwrightScript?: string;
 };
 
