@@ -32,7 +32,7 @@ async function getCaptchaFromCookie(page: Page): Promise<string> {
 
 export async function login(page: Page, options: LoginOptions): Promise<void> {
   await page.goto(`${options.baseUrl.replace(/\/+$/, '')}/login`);
-
+  await page.waitForLoadState('networkidle');
   const captcha = await getCaptchaFromCookie(page);
   await page.getByRole('textbox', { name: '*用户名' }).fill(options.username);
   await page.getByRole('textbox', { name: '*密码' }).fill(options.password);
