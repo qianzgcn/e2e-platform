@@ -18,6 +18,7 @@ export type SkippedRunCase = {
 export const SUBMITTABLE_STATUSES: SubmittableRunStatus[] = ["not_run", "success", "failed"];
 export const ACTIVE_STATUSES: ActiveRunStatus[] = ["queued", "generating", "running"];
 export const INTERRUPTED_RUN_FAILURE_REASON = "服务中断，运行未完成";
+export const USER_STOP_FAILURE_REASON = "用户手动停止";
 
 const ACTIVE_STATUS_SET = new Set<TestCaseRunStatus>(ACTIVE_STATUSES);
 

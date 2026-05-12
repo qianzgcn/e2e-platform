@@ -6,13 +6,18 @@ export type ScriptSource = {
   naturalLanguage: string;
 };
 
+type GenerateScriptsOptions = {
+  signal?: AbortSignal;
+  stopReason?: string;
+};
+
 // 生成单个用例脚本，内部复用批量生成逻辑。
-export async function generateScript(testCase: ScriptSource, baseUrl: string) {
-  await generateScripts([testCase], baseUrl);
+export async function generateScript(testCase: ScriptSource, baseUrl: string, options: GenerateScriptsOptions = {}) {
+  await generateScripts([testCase], baseUrl, options);
 }
 
 // 调用 Claude Code 批量生成 Playwright spec 文件。
-export async function generateScripts(testCases: ScriptSource[], baseUrl: string) {
+export async function generateScripts(testCases: ScriptSource[], baseUrl: string, options: GenerateScriptsOptions = {}) {
   if (!testCases.length) {
     return;
   }
@@ -28,7 +33,7 @@ export async function generateScripts(testCases: ScriptSource[], baseUrl: string
 
   try {
     // Claude 的职责是写入 spec 文件；后续由运行服务读取文件并保存到数据库。
-    await runClaude(prompt, { cwd: process.cwd() });
+    await runClaude(prompt, { cwd: process.cwd(), signal: options.signal, stopReason: options.stopReason });
     logAgent("Claude Code 生成完成", {
       caseIds: testCases.map((testCase) => testCase.id),
     });
@@ -75,7 +80,7 @@ ${JSON.stringify(payload, null, 2)}
 // 统一转换 Claude 执行错误信息。
 function getClaudeErrorMessage(error: { stdout?: string; stderr?: string; message?: string; killed?: boolean; signal?: string }) {
   if (error.killed || error.signal === "SIGTERM") {
-    return "Claude Code 生成用例超时，已终止执行";
+    return error.message || "Claude Code 生成已被终止";
   }
 
   return error.stderr || error.stdout || error.message || "Claude Code 生成用例失败";

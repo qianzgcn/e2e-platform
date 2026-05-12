@@ -93,3 +93,8 @@ export type RunRequestResult = {
   runIds: number[];
   skippedCases: SkippedRunCase[];
 };
+
+export type StopRunResult = {
+  stopped: boolean;
+  affectedTestCaseIds: string[];
+};

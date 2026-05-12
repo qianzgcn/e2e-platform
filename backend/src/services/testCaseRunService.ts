@@ -6,7 +6,9 @@ import { prisma } from "../prisma.js";
 import { runPlaywright } from "./runnerService.js";
 import { chunkByAgentGenerationBatchSize } from "./runBatch.js";
 import {
+  ACTIVE_STATUSES,
   SUBMITTABLE_STATUSES,
+  USER_STOP_FAILURE_REASON,
   splitRunTargetsByStatus,
   toSkippedRunCase,
   type SkippedRunCase,
@@ -52,7 +54,29 @@ type ReadyTaskQueue = {
   wakeRunner?: () => void;
 };
 
+type StopTarget = {
+  runLogId: number;
+  testCaseId: string;
+};
+
+type StopRunResult = {
+  stopped: boolean;
+  affectedTestCaseIds: string[];
+};
+
+type GenerationControl = {
+  controller: AbortController;
+  tasks: RunTask[];
+};
+
+type PlaywrightControl = {
+  controller: AbortController;
+};
+
 const runBatchQueue: RunTask[][] = [];
+const activeReadyQueues = new Set<ReadyTaskQueue>();
+const activeGenerationRuns = new Map<number, GenerationControl>();
+const activePlaywrightRuns = new Map<number, PlaywrightControl>();
 let isRunBatchQueueDraining = false;
 
 // 单条运行复用批量提交结果，返回统一的 runIds/skippedCases 结构。
@@ -91,6 +115,63 @@ export async function runTestCases(testCaseIds: string[]) {
     runIds: queuedResult.tasks.map((task) => task.runLogId),
     skippedCases: allSkippedCases,
   };
+}
+
+// 停止当前活跃运行：排队态移出内存队列，生成态终止 Claude 小批次，运行态终止 Playwright。
+export async function stopTestCaseRun(testCaseId: string): Promise<StopRunResult> {
+  logRun("收到停止用例请求", { testCaseId });
+  const testCase = await prisma.testCase.findUnique({
+    where: { id: testCaseId },
+    select: { id: true },
+  });
+
+  if (!testCase) {
+    throw new Error("用例不存在");
+  }
+
+  const activeRunLog = await prisma.runLog.findFirst({
+    where: {
+      testCaseId,
+      status: { in: [...ACTIVE_STATUSES] },
+      finishedAt: null,
+    },
+    orderBy: { startedAt: "desc" },
+    select: {
+      id: true,
+      testCaseId: true,
+    },
+  });
+
+  if (!activeRunLog) {
+    logRun("停止请求未找到活跃运行", { testCaseId });
+    return { stopped: false, affectedTestCaseIds: [] };
+  }
+
+  const generationControl = activeGenerationRuns.get(activeRunLog.id);
+  if (generationControl) {
+    generationControl.controller.abort(new Error(USER_STOP_FAILURE_REASON));
+    const targets = generationControl.tasks.map(toStopTarget);
+    await markRunsStopped(targets);
+    logRun("已停止 Claude 生成小批次", {
+      testCaseId,
+      affectedTestCaseIds: targets.map((target) => target.testCaseId),
+    });
+    return toStopRunResult(targets);
+  }
+
+  const playwrightControl = activePlaywrightRuns.get(activeRunLog.id);
+  if (playwrightControl) {
+    playwrightControl.controller.abort(new Error(USER_STOP_FAILURE_REASON));
+  }
+
+  const removedTasks = removeQueuedTasks(activeRunLog.id);
+  const targets = removedTasks.length ? removedTasks.map(toStopTarget) : [{ runLogId: activeRunLog.id, testCaseId }];
+  await markRunsStopped(targets);
+  logRun("已停止用例运行", {
+    testCaseId,
+    affectedTestCaseIds: targets.map((target) => target.testCaseId),
+  });
+  return toStopRunResult(targets);
 }
 
 async function createQueuedRunTasks(testCases: RunTargetTestCase[]) {
@@ -204,9 +285,14 @@ async function processRuns(tasks: RunTask[]) {
 // 批次内双流水线：已有脚本先执行，agent 生成完成的用例再追加执行。
 async function processRunPipeline(tasks: RunTask[], project: ProjectConfig) {
   const readyQueue = createReadyTaskQueue();
-  const generationItems = await collectGenerationItems(tasks, project, readyQueue);
+  activeReadyQueues.add(readyQueue);
 
-  await Promise.all([executeReadyTaskQueue(readyQueue, project.baseUrl), generateNeededScripts(generationItems, project, readyQueue)]);
+  try {
+    const generationItems = await collectGenerationItems(tasks, project, readyQueue);
+    await Promise.all([executeReadyTaskQueue(readyQueue, project.baseUrl), generateNeededScripts(generationItems, project, readyQueue)]);
+  } finally {
+    activeReadyQueues.delete(readyQueue);
+  }
 }
 
 // 运行批次结束后清理 playwright-cli 页面探测产物，避免历史快照影响下一次生成。
@@ -334,29 +420,44 @@ async function generateNeededScripts(generationItems: GenerationItem[], project:
 }
 
 async function generateScriptChunk(generationItems: GenerationItem[], project: ProjectConfig, readyQueue: ReadyTaskQueue) {
-  const generationTasks = generationItems.map((item) => item.task);
-  await Promise.all(generationTasks.map((task) => updateStatus(task.runLogId, task.testCase.id, "generating")));
+  const transitionResults = await Promise.all(
+    generationItems.map((item) => updateStatus(item.task.runLogId, item.task.testCase.id, "generating")),
+  );
+  const activeItems = generationItems.filter((_item, index) => transitionResults[index]);
+
+  if (!activeItems.length) {
+    return;
+  }
+
+  const generationTasks = activeItems.map((item) => item.task);
+  const generationControl = registerGenerationControl(generationTasks);
   logRun("开始调用 agent 生成脚本小批次", {
-    caseCount: generationItems.length,
-    testCaseIds: generationItems.map((item) => item.source.id),
+    caseCount: activeItems.length,
+    testCaseIds: activeItems.map((item) => item.source.id),
   });
 
   try {
     await generateScripts(
-      generationItems.map((item) => item.source),
+      activeItems.map((item) => item.source),
       project.baseUrl,
+      {
+        signal: generationControl.controller.signal,
+        stopReason: USER_STOP_FAILURE_REASON,
+      },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Claude Code 生成用例失败";
     logRun("调用 agent 生成脚本小批次失败", {
-      testCaseIds: generationItems.map((item) => item.source.id),
+      testCaseIds: activeItems.map((item) => item.source.id),
       message,
     });
     await Promise.all(generationTasks.map((task) => markFinished(task.runLogId, task.testCase.id, "failed", "", "", message)));
     return;
+  } finally {
+    unregisterGenerationControl(generationControl);
   }
 
-  for (const item of generationItems) {
+  for (const item of activeItems) {
     const saved = await saveGeneratedScript(item.task);
     if (saved) {
       enqueueReadyTask(readyQueue, item.task);
@@ -364,7 +465,7 @@ async function generateScriptChunk(generationItems: GenerationItem[], project: P
   }
 
   logRun("agent 生成脚本小批次保存完成", {
-    testCaseIds: generationItems.map((item) => item.source.id),
+    testCaseIds: activeItems.map((item) => item.source.id),
   });
 }
 
@@ -395,10 +496,27 @@ async function executeTask(task: RunTask, baseUrl: string) {
     return;
   }
 
-  await updateStatus(task.runLogId, latestTestCase.id, "running");
+  const script = latestTestCase.playwrightScript;
+  const switchedToRunning = await updateStatus(task.runLogId, latestTestCase.id, "running");
+  if (!switchedToRunning) {
+    logRun("用例已停止，跳过 Playwright 执行", {
+      runLogId: task.runLogId,
+      testCaseId: latestTestCase.id,
+    });
+    return;
+  }
 
   // runPlaywright 通过 Playwright 命令退出码返回 success，服务层只负责落最终状态。
-  const result = await runPlaywright(latestTestCase.playwrightScript, baseUrl, latestTestCase.id);
+  const playwrightControl = registerPlaywrightControl(task);
+  let result;
+  try {
+    result = await runPlaywright(script, baseUrl, latestTestCase.id, {
+      signal: playwrightControl.controller.signal,
+      stopReason: USER_STOP_FAILURE_REASON,
+    });
+  } finally {
+    unregisterPlaywrightControl(task.runLogId, playwrightControl);
+  }
 
   if (result.success) {
     logRun("用例执行成功", {
@@ -427,13 +545,42 @@ async function saveGeneratedScript(task: RunTask) {
     task.testCase.playwrightScript = script;
     task.testCase.scriptGeneratedAt = new Date();
 
-    await prisma.testCase.update({
-      where: { id: task.testCase.id },
-      data: {
-        playwrightScript: script,
-        scriptGeneratedAt: task.testCase.scriptGeneratedAt,
-      },
+    const saved = await prisma.$transaction(async (tx) => {
+      const activeRunLog = await tx.runLog.findFirst({
+        where: {
+          id: task.runLogId,
+          testCaseId: task.testCase.id,
+          status: { in: [...ACTIVE_STATUSES] },
+          finishedAt: null,
+        },
+        select: { id: true },
+      });
+
+      if (!activeRunLog) {
+        return false;
+      }
+
+      const updated = await tx.testCase.updateMany({
+        where: {
+          id: task.testCase.id,
+          status: { in: [...ACTIVE_STATUSES] },
+        },
+        data: {
+          playwrightScript: script,
+          scriptGeneratedAt: task.testCase.scriptGeneratedAt,
+        },
+      });
+      return updated.count === 1;
     });
+
+    if (!saved) {
+      logRun("用例已停止，跳过保存 agent 脚本", {
+        runLogId: task.runLogId,
+        testCaseId: task.testCase.id,
+      });
+      return false;
+    }
+
     logRun("保存 agent 生成脚本", {
       runLogId: task.runLogId,
       testCaseId: task.testCase.id,
@@ -537,14 +684,35 @@ function resolveVariables(naturalLanguage: string, variables: ProjectVariable[])
   });
 }
 
-// 同步更新运行日志和用例的运行状态。
+// 只推进仍活跃的运行，避免用户停止后被后台流程重新写回运行中或成功。
 async function updateStatus(runLogId: number, testCaseId: string, status: SharedRunningStatus) {
   logRun("更新用例运行状态", { runLogId, testCaseId, status });
-  // 运行日志和用例状态保持同步，列表页可以直接读取 TestCase.status。
-  await Promise.all([
-    prisma.runLog.update({ where: { id: runLogId }, data: { status } }),
-    prisma.testCase.update({ where: { id: testCaseId }, data: { status } }),
-  ]);
+  return prisma.$transaction(async (tx) => {
+    const runLogResult = await tx.runLog.updateMany({
+      where: {
+        id: runLogId,
+        testCaseId,
+        status: { in: [...ACTIVE_STATUSES] },
+        finishedAt: null,
+      },
+      data: { status },
+    });
+
+    if (runLogResult.count !== 1) {
+      logRun("运行日志已结束，跳过状态更新", { runLogId, testCaseId, status });
+      return false;
+    }
+
+    const testCaseResult = await tx.testCase.updateMany({
+      where: {
+        id: testCaseId,
+        status: { in: [...ACTIVE_STATUSES] },
+      },
+      data: { status },
+    });
+
+    return testCaseResult.count === 1;
+  });
 }
 
 // 标记一次运行结束，并写入输出和失败原因。
@@ -564,10 +732,15 @@ async function markFinished(
     failureReason,
   });
 
-  // 结束时写入 stdout/stderr，失败原因同步到用例表用于列表快速展示。
-  await Promise.all([
-    prisma.runLog.update({
-      where: { id: runLogId },
+  // 结束时先锁定本次运行日志，再同步用例状态，避免旧后台任务覆盖新运行。
+  return prisma.$transaction(async (tx) => {
+    const runLogResult = await tx.runLog.updateMany({
+      where: {
+        id: runLogId,
+        testCaseId,
+        status: { in: [...ACTIVE_STATUSES] },
+        finishedAt: null,
+      },
       data: {
         status,
         stdout,
@@ -575,16 +748,136 @@ async function markFinished(
         failureReason,
         finishedAt,
       },
-    }),
-    prisma.testCase.update({
-      where: { id: testCaseId },
+    });
+
+    if (runLogResult.count !== 1) {
+      logRun("运行日志已结束，跳过结束状态写入", { runLogId, testCaseId, status });
+      return false;
+    }
+
+    await tx.testCase.updateMany({
+      where: {
+        id: testCaseId,
+        status: { in: [...ACTIVE_STATUSES] },
+      },
       data: {
         status,
         lastRunAt: finishedAt,
         lastFailureReason: status === "failed" ? failureReason ?? stderr : null,
       },
-    }),
-  ]);
+    });
+    return true;
+  });
+}
+
+function registerGenerationControl(tasks: RunTask[]) {
+  const control: GenerationControl = {
+    controller: new AbortController(),
+    tasks,
+  };
+
+  for (const task of tasks) {
+    activeGenerationRuns.set(task.runLogId, control);
+  }
+
+  return control;
+}
+
+function unregisterGenerationControl(control: GenerationControl) {
+  for (const task of control.tasks) {
+    if (activeGenerationRuns.get(task.runLogId) === control) {
+      activeGenerationRuns.delete(task.runLogId);
+    }
+  }
+}
+
+function registerPlaywrightControl(task: RunTask) {
+  const control: PlaywrightControl = {
+    controller: new AbortController(),
+  };
+
+  activePlaywrightRuns.set(task.runLogId, control);
+  return control;
+}
+
+function unregisterPlaywrightControl(runLogId: number, control: PlaywrightControl) {
+  if (activePlaywrightRuns.get(runLogId) === control) {
+    activePlaywrightRuns.delete(runLogId);
+  }
+}
+
+function removeQueuedTasks(runLogId: number) {
+  const removedTasks: RunTask[] = [];
+
+  for (let batchIndex = runBatchQueue.length - 1; batchIndex >= 0; batchIndex -= 1) {
+    const batch = runBatchQueue[batchIndex];
+    const remaining = batch.filter((task) => {
+      if (task.runLogId !== runLogId) {
+        return true;
+      }
+
+      removedTasks.push(task);
+      return false;
+    });
+
+    if (remaining.length) {
+      runBatchQueue[batchIndex] = remaining;
+    } else {
+      runBatchQueue.splice(batchIndex, 1);
+    }
+  }
+
+  for (const queue of activeReadyQueues) {
+    const originalLength = queue.items.length;
+    queue.items = queue.items.filter((task) => {
+      if (task.runLogId !== runLogId) {
+        return true;
+      }
+
+      removedTasks.push(task);
+      return false;
+    });
+
+    if (queue.items.length !== originalLength) {
+      wakeReadyTaskRunner(queue);
+    }
+  }
+
+  return removedTasks;
+}
+
+async function markRunsStopped(targets: StopTarget[]) {
+  await Promise.all(
+    dedupeStopTargets(targets).map((target) =>
+      markFinished(target.runLogId, target.testCaseId, "failed", "", "", USER_STOP_FAILURE_REASON),
+    ),
+  );
+}
+
+function dedupeStopTargets(targets: StopTarget[]) {
+  const seen = new Set<number>();
+  return targets.filter((target) => {
+    if (seen.has(target.runLogId)) {
+      return false;
+    }
+
+    seen.add(target.runLogId);
+    return true;
+  });
+}
+
+function toStopTarget(task: RunTask): StopTarget {
+  return {
+    runLogId: task.runLogId,
+    testCaseId: task.testCase.id,
+  };
+}
+
+function toStopRunResult(targets: StopTarget[]): StopRunResult {
+  return {
+    stopped: true,
+    affectedTestCaseIds: Array.from(new Set(targets.map((target) => target.testCaseId))),
+  };
 }
 
 // 输出运行服务日志。

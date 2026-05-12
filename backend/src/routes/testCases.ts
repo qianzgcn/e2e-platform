@@ -2,7 +2,7 @@ import { Router } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "../prisma.js";
 import { getLatestArtifacts } from "../services/artifactService.js";
-import { runTestCase, runTestCases } from "../services/testCaseRunService.js";
+import { runTestCase, runTestCases, stopTestCaseRun } from "../services/testCaseRunService.js";
 
 export const testCasesRouter = Router();
 
@@ -190,6 +190,15 @@ testCasesRouter.post("/:id/run", async (req, res) => {
   const ids = parseIds(req.params.id);
   try {
     const result = ids.length === 1 ? await runTestCase(ids[0]) : await runTestCases(ids);
+    res.json(result);
+  } catch (error) {
+    res.status(404).json({ message: error instanceof Error ? error.message : "用例不存在" });
+  }
+});
+
+testCasesRouter.post("/:id/stop", async (req, res) => {
+  try {
+    const result = await stopTestCaseRun(req.params.id);
     res.json(result);
   } catch (error) {
     res.status(404).json({ message: error instanceof Error ? error.message : "用例不存在" });

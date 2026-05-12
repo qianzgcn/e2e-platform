@@ -1,4 +1,4 @@
-import { DeleteOutlined, FileTextOutlined, PlayCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import { DeleteOutlined, FileTextOutlined, PlayCircleOutlined, PlusOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, Descriptions, Empty, Input, Modal, Space, Table, Tabs, Tooltip, Typography, message } from "antd";
 import type { ColumnType } from "antd/es/table";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -13,11 +13,12 @@ import {
   fetchTestCases,
   runTestCase,
   runTestCases,
+  stopTestCase,
   updateTestCase,
 } from "../api/testCases";
 import { isBusyStatus, StatusTag } from "../components/StatusTag";
 import { TestCaseModal } from "../components/TestCaseModal";
-import type { LatestRunDetail, RunRequestResult, TestCaseDetail, TestCaseGroup, TestCaseListItem, TestCasePayload } from "../types";
+import type { LatestRunDetail, RunRequestResult, StopRunResult, TestCaseDetail, TestCaseGroup, TestCaseListItem, TestCasePayload } from "../types";
 
 export function TestCasePage() {
   const [items, setItems] = useState<TestCaseListItem[]>([]);
@@ -157,6 +158,46 @@ export function TestCasePage() {
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "批量运行失败");
     }
+  }
+
+  async function handleStop(item: TestCaseListItem) {
+    const stop = async () => {
+      try {
+        const result = await stopTestCase(item.id);
+        showStopRequestMessage(result);
+        await loadData();
+      } catch (error) {
+        messageApi.error(error instanceof Error ? error.message : "停止用例失败");
+      }
+    };
+
+    if (item.status === "generating") {
+      modal.confirm({
+        title: "停止用例生成",
+        content: "当前 Claude 小批次会一起停止，同批生成中的用例将标记为失败。",
+        okText: "停止",
+        okButtonProps: { danger: true },
+        cancelText: "取消",
+        onOk: stop,
+      });
+      return;
+    }
+
+    await stop();
+  }
+
+  function showStopRequestMessage(result: StopRunResult) {
+    if (!result.stopped) {
+      messageApi.warning("该用例已结束");
+      return;
+    }
+
+    if (result.affectedTestCaseIds.length > 1) {
+      messageApi.success(`已停止当前生成小批次，共 ${result.affectedTestCaseIds.length} 条用例`);
+      return;
+    }
+
+    messageApi.success("已停止用例");
   }
 
   function showRunRequestMessage(result: RunRequestResult, mode: "single" | "batch") {
@@ -345,25 +386,24 @@ export function TestCasePage() {
             },
             {
               title: "操作",
-              width: 104,
+              width: 120,
               fixed: "right",
               render: (_, record) => (
                 <Space>
-                  <Tooltip title="运行">
-                    <Button
-                      icon={<PlayCircleOutlined />}
-                      disabled={isBusyStatus(record.status)}
-                      onClick={() => void handleRun(record)}
-                    />
-                  </Tooltip>
-                  <Tooltip title="删除">
-                    <Button
-                      danger
-                      icon={<DeleteOutlined />}
-                      disabled={isBusyStatus(record.status)}
-                      onClick={() => void handleDelete(record)}
-                    />
-                  </Tooltip>
+                  {isBusyStatus(record.status) ? (
+                    <Tooltip title="停止">
+                      <Button danger icon={<StopOutlined />} onClick={() => void handleStop(record)} />
+                    </Tooltip>
+                  ) : (
+                    <>
+                      <Tooltip title="运行">
+                        <Button icon={<PlayCircleOutlined />} onClick={() => void handleRun(record)} />
+                      </Tooltip>
+                      <Tooltip title="删除">
+                        <Button danger icon={<DeleteOutlined />} onClick={() => void handleDelete(record)} />
+                      </Tooltip>
+                    </>
+                  )}
                 </Space>
               ),
             },

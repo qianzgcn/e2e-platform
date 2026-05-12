@@ -33,6 +33,8 @@ type RunClaudeOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   timeout?: number;
+  signal?: AbortSignal;
+  stopReason?: string;
 };
 
 export type ClaudeInvocation = {
@@ -79,12 +81,33 @@ export function runClaude(prompt: string, options: RunClaudeOptions = {}) {
     });
 
     const child = spawn(invocation.command, invocation.args, createClaudeSpawnOptions(options));
+    let timer: NodeJS.Timeout;
 
-    child.stdin.write(invocation.stdin);
-    child.stdin.end();
+    const cleanup = () => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+    };
 
-    const timer = setTimeout(() => {
+    const onAbort = () => {
+      if (settled) {
+        return;
+      }
+
       settled = true;
+      cleanup();
+      killProcess(child);
+      const message = options.stopReason ?? "Claude Code 生成已被终止";
+      logClaude("Claude Code 已被手动终止", {
+        stdoutLength: stdout.length,
+        stderrLength: stderr.length,
+        recentEvents,
+      });
+      reject(toClaudeError(message, stdout, stderr, true, "SIGTERM"));
+    };
+
+    timer = setTimeout(() => {
+      settled = true;
+      cleanup();
       killProcess(child);
       const message = "Claude Code 生成用例超时，已终止执行";
       logClaude(message, {
@@ -95,6 +118,16 @@ export function runClaude(prompt: string, options: RunClaudeOptions = {}) {
       });
       reject(toClaudeError(message, stdout, stderr, true, "SIGTERM"));
     }, timeout);
+
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+
+    if (options.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    child.stdin.write(invocation.stdin);
+    child.stdin.end();
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -115,7 +148,7 @@ export function runClaude(prompt: string, options: RunClaudeOptions = {}) {
       }
 
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       logClaude("Claude Code 启动失败", { message: error.message });
       reject(toClaudeError(error.message, stdout, stderr));
     });
@@ -126,7 +159,7 @@ export function runClaude(prompt: string, options: RunClaudeOptions = {}) {
       }
 
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       flushClaudeStreamBuffer(stdoutBuffer, onClaudeEvent);
 
       if (code === 0) {
@@ -175,6 +208,8 @@ export function createClaudeSpawnOptions(options: RunClaudeOptions = {}): SpawnO
     cwd: options.cwd ?? process.cwd(),
     // shell: false 让参数原样传给 claude，避免 shell 转义和注入问题。
     shell: false,
+    // 单独进程组方便停止时同时终止 Claude 及其拉起的工具子进程。
+    detached: true,
     env: {
       ...process.env,
       ...options.env,
@@ -381,5 +416,13 @@ function logClaude(message: string, data?: unknown) {
 
 // 终止 Claude 子进程。
 function killProcess(child: ChildProcess) {
-  child.kill();
+  if (!child.pid) {
+    return;
+  }
+
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    child.kill("SIGTERM");
+  }
 }
