@@ -2,6 +2,7 @@ import { Router } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "../prisma.js";
 import { getLatestArtifacts } from "../services/artifactService.js";
+import { removePlaywrightTestResults } from "../services/cleanupService.js";
 import { resolveScriptGenerationOnSave } from "../services/testCaseScriptGeneration.js";
 import { runTestCase, runTestCases, stopTestCaseRun } from "../services/testCaseRunService.js";
 
@@ -169,30 +170,42 @@ testCasesRouter.put("/:id", async (req, res) => {
     naturalLanguage,
     scriptNeedsGeneration: requestedScriptNeedsGeneration,
   });
-  const testCase = await prisma.testCase.update({
-    where: { id },
-    data: {
-      title,
-      groupId,
-      naturalLanguage,
-      scriptNeedsGeneration: scriptGeneration.scriptNeedsGeneration,
-      ...(scriptGeneration.clearScript
-        ? {
-            playwrightScript: null,
-            scriptGeneratedAt: null,
-          }
-        : {}),
-      ...(scriptGeneration.resetRunState
-        ? {
-            status: "not_run",
-            lastRunAt: null,
-            lastFailureReason: null,
-          }
-        : {}),
-      editedAt: new Date(),
-    },
-    include: { group: true },
+  const testCase = await prisma.$transaction(async (tx) => {
+    const updatedTestCase = await tx.testCase.update({
+      where: { id },
+      data: {
+        title,
+        groupId,
+        naturalLanguage,
+        scriptNeedsGeneration: scriptGeneration.scriptNeedsGeneration,
+        ...(scriptGeneration.clearScript
+          ? {
+              playwrightScript: null,
+              scriptGeneratedAt: null,
+            }
+          : {}),
+        ...(scriptGeneration.resetRunState
+          ? {
+              status: "not_run",
+              lastRunAt: null,
+              lastFailureReason: null,
+            }
+          : {}),
+        editedAt: new Date(),
+      },
+      include: { group: true },
+    });
+
+    if (scriptGeneration.clearRunHistory) {
+      await tx.runLog.deleteMany({ where: { testCaseId: id } });
+    }
+
+    return updatedTestCase;
   });
+
+  if (scriptGeneration.clearRunHistory) {
+    await removePlaywrightTestResults(id);
+  }
 
   res.json({
     ...testCase,

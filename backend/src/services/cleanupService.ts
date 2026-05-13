@@ -17,3 +17,9 @@ export async function resetPlaywrightTestResults(testCaseId: string, cwd = proce
   await mkdir(testResultsDir, { recursive: true });
   return testResultsDir;
 }
+
+// 用例脚本失效时删除旧运行产物，避免旧报告继续代表当前用例。
+export async function removePlaywrightTestResults(testCaseId: string, cwd = process.cwd()) {
+  const testResultsDir = path.resolve(cwd, TEST_RESULTS_DIR, testCaseId);
+  await rm(testResultsDir, { recursive: true, force: true });
+}
