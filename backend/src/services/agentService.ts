@@ -9,6 +9,7 @@ export type ScriptSource = {
 type GenerateScriptsOptions = {
   signal?: AbortSignal;
   stopReason?: string;
+  onProgress?: (message: string) => void;
 };
 
 // 生成单个用例脚本，内部复用批量生成逻辑。
@@ -33,7 +34,12 @@ export async function generateScripts(testCases: ScriptSource[], baseUrl: string
 
   try {
     // Claude 的职责是写入 spec 文件；后续由运行服务读取文件并保存到数据库。
-    await runClaude(prompt, { cwd: process.cwd(), signal: options.signal, stopReason: options.stopReason });
+    await runClaude(prompt, {
+      cwd: process.cwd(),
+      signal: options.signal,
+      stopReason: options.stopReason,
+      onProgress: options.onProgress,
+    });
     logAgent("Claude Code 生成完成", {
       caseIds: testCases.map((testCase) => testCase.id),
     });

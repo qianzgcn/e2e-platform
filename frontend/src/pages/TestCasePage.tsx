@@ -1,4 +1,4 @@
-import { DeleteOutlined, FileTextOutlined, PlayCircleOutlined, PlusOutlined, StopOutlined } from "@ant-design/icons";
+import { DeleteOutlined, FileTextOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, Descriptions, Empty, Input, Modal, Space, Table, Tabs, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnType } from "antd/es/table";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -34,6 +34,7 @@ export function TestCasePage() {
   const [runLogItem, setRunLogItem] = useState<TestCaseListItem | null>(null);
   const [runDetail, setRunDetail] = useState<LatestRunDetail | null>(null);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
+  const [runLogActiveTab, setRunLogActiveTab] = useState("overview");
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
 
@@ -272,9 +273,18 @@ export function TestCasePage() {
   async function showRunLog(item: TestCaseListItem) {
     setRunLogItem(item);
     setRunDetail(null);
+    setRunLogActiveTab("overview");
+    await refreshRunLog(item.id);
+  }
+
+  async function refreshRunLog(testCaseId = runLogItem?.id) {
+    if (!testCaseId) {
+      return;
+    }
+
     setRunDetailLoading(true);
     try {
-      setRunDetail(await fetchLatestRun(item.id));
+      setRunDetail(await fetchLatestRun(testCaseId));
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "加载运行日志失败");
     } finally {
@@ -311,9 +321,12 @@ export function TestCasePage() {
               className="w-72"
               onSearch={(value: string) => setTitleKeyword(value.trim())}
             />
-            <Typography.Text type="secondary">已选择 {selectedRowKeys.length} 条</Typography.Text>
+            <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadTestCases()}>
+              刷新
+            </Button>
           </Space>
           <Space>
+            <Typography.Text type="secondary">已选择 {selectedRowKeys.length} 条</Typography.Text>
             <Button
               icon={<PlayCircleOutlined />}
               disabled={!selectedRowKeys.length}
@@ -376,7 +389,7 @@ export function TestCasePage() {
             {
               title: "状态",
               dataIndex: "status",
-              width: 160,
+              width: 120,
               filters: statusFilters,
               onFilter: (value, record) => record.status === value,
               render: (_, record) =>
@@ -415,7 +428,7 @@ export function TestCasePage() {
             },
             {
               title: "操作",
-              width: 120,
+              width: 100,
               fixed: "right",
               render: (_, record) => (
                 <Space>
@@ -452,11 +465,19 @@ export function TestCasePage() {
       />
 
       <Modal
-        title="运行日志"
+        title={
+          <div className="flex items-center justify-between gap-3 pr-8">
+            <span>运行日志</span>
+            <Button size="small" icon={<ReloadOutlined />} loading={runDetailLoading} onClick={() => void refreshRunLog()}>
+              刷新
+            </Button>
+          </div>
+        }
         open={Boolean(runLogItem)}
         onCancel={() => {
           setRunLogItem(null);
           setRunDetail(null);
+          setRunLogActiveTab("overview");
         }}
         footer={null}
         width={1040}
@@ -465,6 +486,8 @@ export function TestCasePage() {
           <Typography.Text type="secondary">加载中...</Typography.Text>
         ) : runLogItem && runDetail?.runLog ? (
           <Tabs
+            activeKey={runLogActiveTab}
+            onChange={setRunLogActiveTab}
             items={[
               {
                 key: "overview",
@@ -490,13 +513,8 @@ export function TestCasePage() {
               },
               {
                 key: "output",
-                label: "输出",
-                children: (
-                  <div className="space-y-4">
-                    <LogBlock title="stdout" value={runDetail.runLog.stdout} />
-                    <LogBlock title="stderr" value={runDetail.runLog.stderr} />
-                  </div>
-                ),
+                label: "用例生成日志",
+                children: <LogBlock title="用例生成日志" value={getGenerationLog(runDetail.runLog.stdout)} emptyText="该运行暂无用例生成日志" />,
               },
               {
                 key: "report",
@@ -517,15 +535,19 @@ export function TestCasePage() {
   );
 }
 
-function LogBlock({ title, value }: { title: string; value?: string | null }) {
+function LogBlock({ title, value, emptyText = "暂无输出" }: { title: string; value?: string | null; emptyText?: string }) {
   return (
     <div>
       <Typography.Text strong>{title}</Typography.Text>
       <pre className="mt-2 max-h-64 overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-100">
-        {value || "暂无输出"}
+        {value || emptyText}
       </pre>
     </div>
   );
+}
+
+function getGenerationLog(stdout?: string | null) {
+  return stdout?.startsWith("[用例生成日志]") ? stdout : null;
 }
 
 const statusFilters: ColumnType<TestCaseListItem>["filters"] = [

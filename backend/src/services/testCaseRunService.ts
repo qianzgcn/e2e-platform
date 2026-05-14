@@ -41,6 +41,7 @@ type RunTargetTestCase = {
 type RunTask = {
   runLogId: number;
   testCase: RunTargetTestCase;
+  generationLogLines?: string[];
 };
 
 type GenerationItem = {
@@ -78,6 +79,8 @@ const activeReadyQueues = new Set<ReadyTaskQueue>();
 const activeGenerationRuns = new Map<number, GenerationControl>();
 const activePlaywrightRuns = new Map<number, PlaywrightControl>();
 let isRunBatchQueueDraining = false;
+
+const GENERATION_LOG_HEADER = "[用例生成日志]";
 
 // 单条运行复用批量提交结果，返回统一的 runIds/skippedCases 结构。
 export async function runTestCase(testCaseId: string) {
@@ -276,7 +279,12 @@ async function processRuns(tasks: RunTask[]) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "运行失败";
     logRun("后台运行批次失败", { message });
-    await Promise.all(tasks.map((task) => markFinished(task.runLogId, task.testCase.id, "failed", "", "", message)));
+    await Promise.all(
+      tasks.map((task) => {
+        appendGenerationLog(task, `运行批次失败：${message}`);
+        return markFinished(task.runLogId, task.testCase.id, "failed", getGenerationLog(task), "", message);
+      }),
+    );
   } finally {
     await cleanupRunWorkspace();
   }
@@ -351,12 +359,13 @@ async function executeTaskWithIsolation(task: RunTask, baseUrl: string) {
     await executeTask(task, baseUrl);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Playwright 执行异常";
+    appendGenerationLog(task, `用例执行异常：${message}`);
     logRun("用例执行异常", {
       runLogId: task.runLogId,
       testCaseId: task.testCase.id,
       message,
     });
-    await markFinished(task.runLogId, task.testCase.id, "failed", "", "", message);
+    await markFinished(task.runLogId, task.testCase.id, "failed", getGenerationLog(task), "", message);
   }
 }
 
@@ -373,6 +382,7 @@ async function collectGenerationItems(tasks: RunTask[], project: ProjectConfig, 
         playwrightScript: testCase.playwrightScript,
       })
     ) {
+      appendGenerationLog(task, "本次复用已有 Playwright 脚本，未进入 agent 生成");
       logRun("复用已有脚本，跳过 agent 生成", {
         runLogId: task.runLogId,
         testCaseId: testCase.id,
@@ -384,8 +394,10 @@ async function collectGenerationItems(tasks: RunTask[], project: ProjectConfig, 
     }
 
     try {
+      appendGenerationLog(task, "开始解析自然语言用例变量");
       // 变量替换只影响传给 agent 的内容，不回写自然语言用例原文。
       const resolvedNaturalLanguage = resolveVariables(testCase.naturalLanguage, project.variables);
+      appendGenerationLog(task, "变量解析完成，等待进入 agent 生成");
       generationItems.push({
         task,
         source: {
@@ -403,12 +415,13 @@ async function collectGenerationItems(tasks: RunTask[], project: ProjectConfig, 
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "变量解析失败";
+      appendGenerationLog(task, `变量解析失败：${message}`);
       logRun("变量解析失败", {
         runLogId: task.runLogId,
         testCaseId: testCase.id,
         message,
       });
-      await markFinished(task.runLogId, testCase.id, "failed", "", "", message);
+      await markFinished(task.runLogId, testCase.id, "failed", getGenerationLog(task), "", message);
     }
   }
 
@@ -439,6 +452,7 @@ async function generateScriptChunk(generationItems: GenerationItem[], project: P
 
   const generationTasks = activeItems.map((item) => item.task);
   const generationControl = registerGenerationControl(generationTasks);
+  appendGenerationLogToItems(activeItems, `进入 agent 生成，批次包含 ${activeItems.length} 条用例`);
   logRun("开始调用 agent 生成脚本小批次", {
     caseCount: activeItems.length,
     testCaseIds: activeItems.map((item) => item.source.id),
@@ -451,15 +465,19 @@ async function generateScriptChunk(generationItems: GenerationItem[], project: P
       {
         signal: generationControl.controller.signal,
         stopReason: USER_STOP_FAILURE_REASON,
+        onProgress: (message) => appendGenerationLogToItems(activeItems, message),
       },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Claude Code 生成用例失败";
+    appendGenerationLogToItems(activeItems, `agent 生成失败：${message}`);
     logRun("调用 agent 生成脚本小批次失败", {
       testCaseIds: activeItems.map((item) => item.source.id),
       message,
     });
-    await Promise.all(generationTasks.map((task) => markFinished(task.runLogId, task.testCase.id, "failed", "", "", message)));
+    await Promise.all(
+      generationTasks.map((task) => markFinished(task.runLogId, task.testCase.id, "failed", getGenerationLog(task), "", message)),
+    );
     return;
   } finally {
     unregisterGenerationControl(generationControl);
@@ -495,6 +513,7 @@ async function executeTask(task: RunTask, baseUrl: string) {
 
   // 变量解析或 agent 生成阶段已经失败的用例，不再进入 Playwright 执行。
   if (latestTestCase.status === "failed" || !latestTestCase.playwrightScript) {
+    appendGenerationLog(task, "跳过 Playwright 执行：脚本生成阶段已失败或脚本为空");
     logRun("跳过 Playwright 执行", {
       runLogId: task.runLogId,
       testCaseId: latestTestCase.id,
@@ -507,6 +526,7 @@ async function executeTask(task: RunTask, baseUrl: string) {
   const script = latestTestCase.playwrightScript;
   const switchedToRunning = await updateStatus(task.runLogId, latestTestCase.id, "running");
   if (!switchedToRunning) {
+    appendGenerationLog(task, "运行日志已结束，跳过 Playwright 执行");
     logRun("用例已停止，跳过 Playwright 执行", {
       runLogId: task.runLogId,
       testCaseId: latestTestCase.id,
@@ -527,20 +547,22 @@ async function executeTask(task: RunTask, baseUrl: string) {
   }
 
   if (result.success) {
+    appendGenerationLog(task, "Playwright 执行成功");
     logRun("用例执行成功", {
       runLogId: task.runLogId,
       testCaseId: latestTestCase.id,
     });
-    await markFinished(task.runLogId, latestTestCase.id, "success", result.stdout, result.stderr);
+    await markFinished(task.runLogId, latestTestCase.id, "success", getGenerationLog(task), result.stderr);
     return;
   }
 
+  appendGenerationLog(task, `Playwright 执行失败：${truncateLogMessage(result.failureReason ?? "未知错误")}`);
   logRun("用例执行失败", {
     runLogId: task.runLogId,
     testCaseId: latestTestCase.id,
     failureReason: result.failureReason,
   });
-  await markFinished(task.runLogId, latestTestCase.id, "failed", result.stdout, result.stderr, result.failureReason);
+  await markFinished(task.runLogId, latestTestCase.id, "failed", getGenerationLog(task), result.stderr, result.failureReason);
 }
 
 // 读取 Claude 生成的 spec 文件，并保存回数据库。
@@ -583,6 +605,7 @@ async function saveGeneratedScript(task: RunTask) {
     });
 
     if (!saved) {
+      appendGenerationLog(task, "用例已停止，跳过保存 agent 脚本");
       logRun("用例已停止，跳过保存 agent 脚本", {
         runLogId: task.runLogId,
         testCaseId: task.testCase.id,
@@ -590,6 +613,7 @@ async function saveGeneratedScript(task: RunTask) {
       return false;
     }
 
+    appendGenerationLog(task, `保存 agent 生成脚本成功：${path.relative(process.cwd(), specPath).replaceAll(path.sep, "/")}`);
     logRun("保存 agent 生成脚本", {
       runLogId: task.runLogId,
       testCaseId: task.testCase.id,
@@ -598,6 +622,7 @@ async function saveGeneratedScript(task: RunTask) {
     });
     return true;
   } catch {
+    appendGenerationLog(task, `agent 未生成目标 spec 文件：${task.testCase.id}.spec.ts`);
     logRun("agent 未生成目标 spec 文件", {
       runLogId: task.runLogId,
       testCaseId: task.testCase.id,
@@ -607,7 +632,7 @@ async function saveGeneratedScript(task: RunTask) {
       task.runLogId,
       task.testCase.id,
       "failed",
-      "",
+      getGenerationLog(task),
       "",
       `Agent 未生成用例文件: ${task.testCase.id}.spec.ts`,
     );
@@ -843,7 +868,7 @@ function removeQueuedTasks(runLogId: number) {
 async function markRunsStopped(targets: StopTarget[]) {
   await Promise.all(
     dedupeStopTargets(targets).map((target) =>
-      markFinished(target.runLogId, target.testCaseId, "failed", "", "", USER_STOP_FAILURE_REASON),
+      markFinished(target.runLogId, target.testCaseId, "failed", createGenerationLog(USER_STOP_FAILURE_REASON), "", USER_STOP_FAILURE_REASON),
     ),
   );
 }
@@ -872,6 +897,69 @@ function toStopRunResult(targets: StopTarget[]): StopRunResult {
     stopped: true,
     affectedTestCaseIds: Array.from(new Set(targets.map((target) => target.testCaseId))),
   };
+}
+
+function appendGenerationLogToItems(items: GenerationItem[], message: string) {
+  for (const item of items) {
+    appendGenerationLog(item.task, message);
+  }
+}
+
+function appendGenerationLog(task: RunTask, message: string) {
+  task.generationLogLines ??= [GENERATION_LOG_HEADER];
+  task.generationLogLines.push(`${formatLogTime(new Date())} ${message}`);
+  void persistGenerationLog(task);
+}
+
+function getGenerationLog(task: RunTask) {
+  return (task.generationLogLines ?? [GENERATION_LOG_HEADER, `${formatLogTime(new Date())} 暂无用例生成日志`]).join("\n");
+}
+
+function createGenerationLog(message: string) {
+  return [GENERATION_LOG_HEADER, `${formatLogTime(new Date())} ${message}`].join("\n");
+}
+
+async function persistGenerationLog(task: RunTask) {
+  try {
+    await prisma.runLog.updateMany({
+      where: {
+        id: task.runLogId,
+        testCaseId: task.testCase.id,
+        status: { in: [...ACTIVE_STATUSES] },
+        finishedAt: null,
+      },
+      data: {
+        stdout: getGenerationLog(task),
+      },
+    });
+  } catch (error) {
+    logRun("实时写入用例生成日志失败", {
+      runLogId: task.runLogId,
+      testCaseId: task.testCase.id,
+      message: error instanceof Error ? error.message : "未知错误",
+    });
+  }
+}
+
+function formatLogTime(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    "-",
+    pad(date.getMonth() + 1),
+    "-",
+    pad(date.getDate()),
+    " ",
+    pad(date.getHours()),
+    ":",
+    pad(date.getMinutes()),
+    ":",
+    pad(date.getSeconds()),
+  ].join("");
+}
+
+function truncateLogMessage(message: string) {
+  return message.length <= 300 ? message : `${message.slice(0, 300)}...`;
 }
 
 // 输出运行服务日志。

@@ -35,6 +35,7 @@ type RunClaudeOptions = {
   timeout?: number;
   signal?: AbortSignal;
   stopReason?: string;
+  onProgress?: (message: string) => void;
 };
 
 export type ClaudeInvocation = {
@@ -61,6 +62,7 @@ export function runClaude(prompt: string, options: RunClaudeOptions = {}) {
 
       if (summary) {
         pushRecentEvent(recentEvents, summary);
+        options.onProgress?.(summary);
         logClaude("Claude Code 事件", summary);
       }
 
