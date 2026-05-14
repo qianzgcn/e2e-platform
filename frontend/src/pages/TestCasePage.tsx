@@ -348,7 +348,12 @@ export function TestCasePage() {
           rowKey="id"
           loading={loading}
           dataSource={items}
-          pagination={{ pageSize: 8 }}
+          pagination={{
+            defaultPageSize: 10,
+            pageSizeOptions: ["10", "20", "50", "100"],
+            showSizeChanger: true,
+            showTotal: (total) => `共 ${total} 条`,
+          }}
           rowSelection={{
             selectedRowKeys,
             onChange: (keys) => setSelectedRowKeys(keys.map(String)),
