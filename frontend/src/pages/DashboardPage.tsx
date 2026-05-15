@@ -1,11 +1,25 @@
-import { Alert, Card, Col, Empty, Row, Statistic, Table, Typography, message } from "antd";
+import { FileTextOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Col, Empty, Row, Statistic, Table, Tooltip, Typography, message } from "antd";
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { fetchDashboard } from "../api/dashboard";
-import type { DashboardData } from "../types";
+import { createTestCaseGroup, fetchTestCaseGroups } from "../api/testCaseGroups";
+import { fetchTestCase, updateTestCase } from "../api/testCases";
+import { RunLogModal } from "../components/RunLogModal";
+import { TestCaseModal } from "../components/TestCaseModal";
+import type { DashboardData, TestCaseDetail, TestCaseGroup, TestCasePayload } from "../types";
+import { formatDateTime } from "../utils/date";
 
 export function DashboardPage() {
+  const navigate = useNavigate();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [groups, setGroups] = useState<TestCaseGroup[]>([]);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
+  const [editingCase, setEditingCase] = useState<TestCaseDetail | null>(null);
+  const [caseModalOpen, setCaseModalOpen] = useState(false);
+  const [runLogItem, setRunLogItem] = useState<DashboardData["recentFailedCases"][number] | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
 
   const loadData = useCallback(async () => {
@@ -23,6 +37,55 @@ export function DashboardPage() {
     void loadData();
   }, [loadData]);
 
+  async function ensureGroupsLoaded() {
+    if (groupsLoaded) {
+      return;
+    }
+
+    setGroups(await fetchTestCaseGroups());
+    setGroupsLoaded(true);
+  }
+
+  async function openEditModal(id: string) {
+    try {
+      const [testCase] = await Promise.all([fetchTestCase(id), ensureGroupsLoaded()]);
+      setEditingCase(testCase);
+      setCaseModalOpen(true);
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "加载用例详情失败");
+    }
+  }
+
+  async function handleSubmit(data: TestCasePayload) {
+    if (!editingCase) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await updateTestCase(editingCase.id, data);
+      setCaseModalOpen(false);
+      await loadData();
+      messageApi.success("用例已保存");
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "保存用例失败");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleCreateGroup(name: string) {
+    try {
+      const group = await createTestCaseGroup(name);
+      setGroups((current) => [...current, group]);
+      messageApi.success("分组已创建");
+      return group;
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "创建分组失败");
+      throw error;
+    }
+  }
+
   return (
     <div className="space-y-5">
       {contextHolder}
@@ -36,11 +99,17 @@ export function DashboardPage() {
       <Row gutter={16}>
         <Col xs={24} md={12}>
           <Card bordered={false}>
-            <Statistic title="成功率" value={data?.successRate ?? 0} suffix="%" loading={loading} />
+            <Statistic
+              title="成功率"
+              value={data?.successRate ?? 0}
+              suffix="%"
+              loading={loading}
+              valueStyle={{ color: getSuccessRateColor(data?.successRate ?? 0) }}
+            />
           </Card>
         </Col>
         <Col xs={24} md={12}>
-          <Card bordered={false}>
+          <Card bordered={false} hoverable className="cursor-pointer" onClick={() => navigate("/test-cases")}>
             <Statistic title="用例总数" value={data?.totalCases ?? 0} loading={loading} />
           </Card>
         </Col>
@@ -59,9 +128,33 @@ export function DashboardPage() {
             pagination={false}
             dataSource={data.recentFailedCases}
             columns={[
-              { title: "用例名称", dataIndex: "title" },
+              {
+                title: "用例名称",
+                dataIndex: "title",
+                render: (title: string, record) => (
+                  <Tooltip title={title}>
+                    <Button type="link" className="!max-w-full !px-0" onClick={() => void openEditModal(record.id)}>
+                      <span className="block truncate">{title}</span>
+                    </Button>
+                  </Tooltip>
+                ),
+              },
               { title: "分组", dataIndex: "groupName", width: 180 },
-              { title: "失败原因", dataIndex: "failureReason" },
+              {
+                title: "运行日志",
+                width: 88,
+                render: (_, record) => (
+                  <Tooltip title="查看运行日志">
+                    <Button icon={<FileTextOutlined />} onClick={() => setRunLogItem(record)} />
+                  </Tooltip>
+                ),
+              },
+              {
+                title: "运行时间",
+                dataIndex: "lastRunAt",
+                width: 180,
+                render: (value: string | null) => formatDateTime(value),
+              },
             ]}
           />
         ) : (
@@ -74,6 +167,25 @@ export function DashboardPage() {
         showIcon
         message="成功率只统计每个用例的最新一次运行状态"
       />
+
+      <TestCaseModal
+        open={caseModalOpen}
+        loading={saving}
+        initialValue={editingCase}
+        groups={groups}
+        onCancel={() => setCaseModalOpen(false)}
+        onSubmit={handleSubmit}
+        onCreateGroup={handleCreateGroup}
+      />
+      <RunLogModal target={runLogItem} onClose={() => setRunLogItem(null)} />
     </div>
   );
+}
+
+function getSuccessRateColor(value: number) {
+  if (value === 100) {
+    return "#16a34a";
+  }
+
+  return value >= 50 ? "#d97706" : "#dc2626";
 }

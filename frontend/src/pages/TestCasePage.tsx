@@ -1,14 +1,12 @@
 import { DeleteOutlined, FileTextOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
-import { Button, Descriptions, Empty, Input, Modal, Space, Table, Tabs, Tag, Tooltip, Typography, message } from "antd";
+import { Button, Input, Modal, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnType } from "antd/es/table";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { toBackendUrl } from "../api/url";
 import { createTestCaseGroup, fetchTestCaseGroups } from "../api/testCaseGroups";
 import {
   createTestCase,
   deleteTestCase,
   deleteTestCases,
-  fetchLatestRun,
   fetchTestCase,
   fetchTestCases,
   runTestCase,
@@ -16,9 +14,11 @@ import {
   stopTestCase,
   updateTestCase,
 } from "../api/testCases";
+import { RunLogModal } from "../components/RunLogModal";
 import { isBusyStatus, StatusTag } from "../components/StatusTag";
 import { TestCaseModal } from "../components/TestCaseModal";
-import type { LatestRunDetail, RunRequestResult, StopRunResult, TestCaseDetail, TestCaseGroup, TestCaseListItem, TestCasePayload } from "../types";
+import type { RunRequestResult, StopRunResult, TestCaseDetail, TestCaseGroup, TestCaseListItem, TestCasePayload } from "../types";
+import { formatDateTime } from "../utils/date";
 
 const ACTIVE_CASE_POLL_INTERVAL_MS = 5000;
 
@@ -32,9 +32,6 @@ export function TestCasePage() {
   const [editingCase, setEditingCase] = useState<TestCaseDetail | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [runLogItem, setRunLogItem] = useState<TestCaseListItem | null>(null);
-  const [runDetail, setRunDetail] = useState<LatestRunDetail | null>(null);
-  const [runDetailLoading, setRunDetailLoading] = useState(false);
-  const [runLogActiveTab, setRunLogActiveTab] = useState("overview");
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
 
@@ -270,30 +267,8 @@ export function TestCasePage() {
     });
   }
 
-  async function showRunLog(item: TestCaseListItem) {
+  function showRunLog(item: TestCaseListItem) {
     setRunLogItem(item);
-    setRunDetail(null);
-    setRunLogActiveTab("overview");
-    await refreshRunLog(item.id);
-  }
-
-  async function refreshRunLog(testCaseId = runLogItem?.id) {
-    if (!testCaseId) {
-      return;
-    }
-
-    setRunDetailLoading(true);
-    try {
-      setRunDetail(await fetchLatestRun(testCaseId));
-    } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : "加载运行日志失败");
-    } finally {
-      setRunDetailLoading(false);
-    }
-  }
-
-  function formatDateTime(value?: string | null) {
-    return value ? new Date(value).toLocaleString() : "暂无";
   }
 
   return (
@@ -387,7 +362,7 @@ export function TestCasePage() {
               width: 88,
               render: (_, record) => (
                 <Tooltip title="查看运行日志">
-                  <Button icon={<FileTextOutlined />} onClick={() => void showRunLog(record)} />
+                  <Button icon={<FileTextOutlined />} onClick={() => showRunLog(record)} />
                 </Tooltip>
               ),
             },
@@ -469,90 +444,9 @@ export function TestCasePage() {
         onCreateGroup={handleCreateGroup}
       />
 
-      <Modal
-        title={
-          <div className="flex items-center justify-between gap-3 pr-8">
-            <span>运行日志</span>
-            <Button size="small" icon={<ReloadOutlined />} loading={runDetailLoading} onClick={() => void refreshRunLog()}>
-              刷新
-            </Button>
-          </div>
-        }
-        open={Boolean(runLogItem)}
-        onCancel={() => {
-          setRunLogItem(null);
-          setRunDetail(null);
-          setRunLogActiveTab("overview");
-        }}
-        footer={null}
-        width={1040}
-      >
-        {runDetailLoading ? (
-          <Typography.Text type="secondary">加载中...</Typography.Text>
-        ) : runLogItem && runDetail?.runLog ? (
-          <Tabs
-            activeKey={runLogActiveTab}
-            onChange={setRunLogActiveTab}
-            items={[
-              {
-                key: "overview",
-                label: "概览",
-                children: (
-                  <Descriptions column={1} size="small">
-                    <Descriptions.Item label="用例名称">{runLogItem.title}</Descriptions.Item>
-                    <Descriptions.Item label="分组">{runLogItem.groupName}</Descriptions.Item>
-                    <Descriptions.Item label="状态">
-                      <StatusTag status={runDetail.runLog.status} />
-                    </Descriptions.Item>
-                    <Descriptions.Item label="开始时间">{formatDateTime(runDetail.runLog.startedAt)}</Descriptions.Item>
-                    <Descriptions.Item label="结束时间">{formatDateTime(runDetail.runLog.finishedAt)}</Descriptions.Item>
-                    {runDetail.runLog.failureReason ? (
-                      <Descriptions.Item label="失败原因">
-                        <Typography.Paragraph className="!mb-0" copyable>
-                          {runDetail.runLog.failureReason}
-                        </Typography.Paragraph>
-                      </Descriptions.Item>
-                    ) : null}
-                  </Descriptions>
-                ),
-              },
-              {
-                key: "output",
-                label: "用例生成日志",
-                children: <LogBlock title="用例生成日志" value={getGenerationLog(runDetail.runLog.stdout)} emptyText="该运行暂无用例生成日志" />,
-              },
-              {
-                key: "report",
-                label: "测试报告",
-                children: runDetail.reportUrl ? (
-                  <iframe title="Playwright HTML 报告" src={toBackendUrl(runDetail.reportUrl)} className="h-[560px] w-full rounded border border-gray-200" />
-                ) : (
-                  <Empty description="暂无测试报告" />
-                ),
-              },
-            ]}
-          />
-        ) : (
-          <Empty description="暂无运行日志" />
-        )}
-      </Modal>
+      <RunLogModal target={runLogItem} onClose={() => setRunLogItem(null)} />
     </div>
   );
-}
-
-function LogBlock({ title, value, emptyText = "暂无输出" }: { title: string; value?: string | null; emptyText?: string }) {
-  return (
-    <div>
-      <Typography.Text strong>{title}</Typography.Text>
-      <pre className="mt-2 max-h-64 overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-100">
-        {value || emptyText}
-      </pre>
-    </div>
-  );
-}
-
-function getGenerationLog(stdout?: string | null) {
-  return stdout?.startsWith("[用例生成日志]") ? stdout : null;
 }
 
 const statusFilters: ColumnType<TestCaseListItem>["filters"] = [

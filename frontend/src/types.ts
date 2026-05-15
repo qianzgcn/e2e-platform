@@ -43,7 +43,7 @@ export type DashboardData = {
     id: string;
     title: string;
     groupName: string;
-    failureReason: string;
+    lastRunAt?: string | null;
   }>;
 };
 

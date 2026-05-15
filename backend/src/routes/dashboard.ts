@@ -9,7 +9,7 @@ type FailedTestCaseRow = {
   group: {
     name: string;
   };
-  lastFailureReason: string | null;
+  lastRunAt: Date | null;
 };
 
 dashboardRouter.get("/", async (_req, res) => {
@@ -28,7 +28,7 @@ dashboardRouter.get("/", async (_req, res) => {
             name: true,
           },
         },
-        lastFailureReason: true,
+        lastRunAt: true,
       },
     }),
   ]);
@@ -40,7 +40,7 @@ dashboardRouter.get("/", async (_req, res) => {
       id: item.id,
       title: item.title,
       groupName: item.group.name,
-      failureReason: item.lastFailureReason ?? "",
+      lastRunAt: item.lastRunAt,
     })),
   });
 });
