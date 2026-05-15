@@ -2,7 +2,7 @@ import "dotenv/config";
 import { PrismaMariaDb } from "@prisma/adapter-mariadb";
 import { PrismaClient } from "@prisma/client";
 
-function databaseUrlToMariaDbConfig(databaseUrl: string) {
+export function databaseUrlToMariaDbConfig(databaseUrl: string) {
   const url = new URL(databaseUrl);
 
   return {

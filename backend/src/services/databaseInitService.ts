@@ -1,10 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { prisma } from "../prisma.js";
+import mariadb from "mariadb";
+import { databaseUrlToMariaDbConfig } from "../prisma.js";
 
-type ColumnCountRow = {
-  count: bigint | number | string;
-};
+const repeatableSqlFiles = ["init.sql", "add_column.sql", "change_column.sql"];
 
 function splitSqlStatements(sql: string): string[] {
   return sql
@@ -17,35 +16,34 @@ function splitSqlStatements(sql: string): string[] {
 }
 
 export async function initializeDatabase() {
-  const initSqlPath = path.resolve(process.cwd(), "sql/init.sql");
-  const initSql = await readFile(initSqlPath, "utf8");
+  const connection = await mariadb.createConnection(databaseUrlToMariaDbConfig(process.env.DATABASE_URL!));
 
-  // init.sql 里的语句都必须可重复执行，保证服务重启不会破坏已有数据。
-  for (const statement of splitSqlStatements(initSql)) {
-    await prisma.$executeRawUnsafe(statement);
+  try {
+    for (const fileName of repeatableSqlFiles) {
+      await executeSqlFileIfExists(connection, fileName);
+    }
+  } finally {
+    await connection.end();
   }
-
-  await ensureScriptNeedsGenerationColumn();
 }
 
-async function ensureScriptNeedsGenerationColumn() {
-  const rows = await prisma.$queryRaw<ColumnCountRow[]>`
-    SELECT COUNT(*) AS count
-    FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = 'TestCase'
-      AND COLUMN_NAME = 'scriptNeedsGeneration'
-  `;
+async function executeSqlFileIfExists(connection: mariadb.Connection, fileName: string) {
+  const sqlPath = path.resolve(process.cwd(), "sql", fileName);
+  let sql: string;
 
-  if (Number(rows[0]?.count ?? 0) > 0) {
-    return;
+  try {
+    sql = await readFile(sqlPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+
+    throw error;
   }
 
-  // 老库补列时按已有脚本初始化：脚本为空需要生成，已有脚本默认可复用。
-  await prisma.$executeRawUnsafe(
-    "ALTER TABLE `TestCase` ADD COLUMN `scriptNeedsGeneration` BOOLEAN NOT NULL DEFAULT TRUE",
-  );
-  await prisma.$executeRawUnsafe(
-    "UPDATE `TestCase` SET `scriptNeedsGeneration` = CASE WHEN `playwrightScript` IS NULL OR TRIM(`playwrightScript`) = '' THEN TRUE ELSE FALSE END",
-  );
+  const statements = splitSqlStatements(sql);
+
+  for (const statement of statements) {
+    await connection.query(statement);
+  }
 }

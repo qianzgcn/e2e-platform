@@ -9,6 +9,7 @@ type ProjectForm = {
   variables: Array<{
     name: string;
     value: string;
+    description?: string | null;
   }>;
 };
 
@@ -73,7 +74,7 @@ export function ProjectSettingsPage() {
         <Typography.Text type="secondary">维护当前项目的基础信息</Typography.Text>
       </div>
 
-      <div className="content-panel max-w-3xl p-5">
+      <div className="content-panel max-w-5xl p-5">
         {!hasProject ? (
           <Alert
             className="mb-4"
@@ -103,23 +104,24 @@ export function ProjectSettingsPage() {
                       </Typography.Title>
                       <Typography.Text type="secondary">用例中可以通过 {"${变量名}"} 引用变量值</Typography.Text>
                     </div>
-                    <Button icon={<PlusOutlined />} onClick={() => add({ name: "", value: "" })}>
+                    <Button icon={<PlusOutlined />} onClick={() => add({ name: "", value: "", description: "" })}>
                       新增变量
                     </Button>
                   </div>
 
                   <div className="space-y-3">
                     {fields.length > 0 && (
-                      <div className="grid grid-cols-[minmax(160px,1fr)_minmax(220px,1.4fr)_40px] gap-3 text-xs text-gray-500">
+                      <div className="hidden grid-cols-[minmax(140px,1fr)_minmax(200px,1.3fr)_minmax(180px,1fr)_40px] gap-3 text-xs text-gray-500 md:grid">
                         <span>变量名</span>
                         <span>变量值</span>
+                        <span>说明</span>
                         <span />
                       </div>
                     )}
                     {fields.map((field) => (
                       <div
                         key={field.key}
-                        className="grid grid-cols-[minmax(160px,1fr)_minmax(220px,1.4fr)_40px] gap-3"
+                        className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(140px,1fr)_minmax(200px,1.3fr)_minmax(180px,1fr)_40px]"
                       >
                         <Form.Item
                           key={`${field.key}-name`}
@@ -136,6 +138,13 @@ export function ProjectSettingsPage() {
                           rules={[{ required: true, message: "请输入变量值" }]}
                         >
                           <Input.Password placeholder="变量值" autoComplete="new-password" />
+                        </Form.Item>
+                        <Form.Item
+                          key={`${field.key}-description`}
+                          name={[field.name, "description"]}
+                          className="!mb-0"
+                        >
+                          <Input/>
                         </Form.Item>
                         <Button danger icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
                       </div>

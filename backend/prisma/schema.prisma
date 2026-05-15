@@ -38,6 +38,7 @@ model ProjectVariable {
   project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   name      String
   value     String   @db.Text
+  description String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -30,7 +30,7 @@ cp .env.example .env
 npm run prisma:generate
 ```
 
-数据库表会在后端启动时按 `backend/sql/init.sql` 自动初始化。平时启动后端只需要：
+数据库表会在后端启动时按 `backend/sql/init.sql`、`backend/sql/add_column.sql`、`backend/sql/change_column.sql` 自动初始化和升级。平时启动后端只需要：
 
 ```bash
 npm run dev
@@ -119,7 +119,7 @@ docker run -d \
 http://localhost:9099
 ```
 
-容器启动时会由后端自动执行 `sql/init.sql` 初始化数据库表，然后启动 Web 服务。
+容器启动时会由后端自动执行 `sql/init.sql`、`sql/add_column.sql`、`sql/change_column.sql` 初始化和升级数据库表，然后启动 Web 服务。
 
 ## 运行生成的 Playwright 用例
 
@@ -158,5 +158,5 @@ npm run test:generated -- tests/generated/<用例id>.spec.ts
 
 - 启动前请确认 MySQL 已运行，并按需修改 `backend/.env` 中的 `DATABASE_URL`。
 - 平时启动不需要手动建表；空库会在后端启动时自动创建当前版本需要的表。
-- 如果修改了表结构，需要同步更新 `backend/prisma/schema.prisma` 和 `backend/sql/init.sql`。
+- 如果修改了表结构，需要同步更新 `backend/prisma/schema.prisma` 和 `backend/sql/init.sql`；新增字段放 `backend/sql/add_column.sql`，修改字段放 `backend/sql/change_column.sql`，SQL 必须自行判断并保证可重复执行。
 - 生成的脚本和运行结果在 `backend/tests/generated`、`backend/test-results` 下，属于运行产物，不需要提交仓库。

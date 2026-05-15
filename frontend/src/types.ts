@@ -58,6 +58,7 @@ export type ProjectVariable = {
   id?: number;
   name: string;
   value: string;
+  description?: string | null;
   createdAt?: string;
   updatedAt?: string;
 };

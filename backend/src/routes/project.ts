@@ -14,6 +14,7 @@ const projectInclude = {
 type ProjectVariableInput = {
   name: string;
   value: string;
+  description?: string | null;
 };
 
 projectRouter.get("/", async (_req, res) => {
@@ -27,6 +28,7 @@ projectRouter.put("/", async (req, res) => {
   const variables = ((req.body.variables ?? []) as ProjectVariableInput[]).map((variable) => ({
     name: variable.name.trim(),
     value: variable.value,
+    description: variable.description?.trim() || null,
   }));
 
   if (!name || !baseUrl) {

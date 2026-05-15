@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS `ProjectVariable` (
   `projectId` INTEGER NOT NULL,
   `name` VARCHAR(191) NOT NULL,
   `value` TEXT NOT NULL,
+  `description` TEXT NULL,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updatedAt` DATETIME(3) NOT NULL,
   INDEX `ProjectVariable_projectId_idx` (`projectId`),
