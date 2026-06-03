@@ -29,6 +29,24 @@ export type TestCasePayload = {
   playwrightScript?: string;
 };
 
+export type TestCaseExcelRow = {
+  title: string;
+  groupName: string;
+  naturalLanguage: string;
+};
+
+export type TestCaseImportResult = {
+  createdCount: number;
+  skippedCount: number;
+  createdIds: string[];
+  skippedRows: Array<
+    Partial<TestCaseExcelRow> & {
+      rowNumber?: number;
+      reason: string;
+    }
+  >;
+};
+
 export type TestCaseGroup = {
   id: number;
   name: string;

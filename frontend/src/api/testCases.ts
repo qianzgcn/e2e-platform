@@ -1,5 +1,14 @@
 import { request } from "./client";
-import type { LatestRunDetail, RunRequestResult, StopRunResult, TestCaseDetail, TestCaseListItem, TestCasePayload } from "../types";
+import type {
+  LatestRunDetail,
+  RunRequestResult,
+  StopRunResult,
+  TestCaseDetail,
+  TestCaseExcelRow,
+  TestCaseImportResult,
+  TestCaseListItem,
+  TestCasePayload,
+} from "../types";
 
 export function fetchTestCases(title?: string) {
   const query = title ? `?title=${encodeURIComponent(title)}` : "";
@@ -59,5 +68,19 @@ export function runTestCases(ids: string[]) {
 export function runAllTestCases() {
   return request<RunRequestResult>("/test-cases/run-all", {
     method: "POST",
+  });
+}
+
+export function exportTestCaseRows(ids: string[]) {
+  return request<{ rows: TestCaseExcelRow[] }>("/test-cases/export-rows", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  });
+}
+
+export function importTestCases(rows: Array<TestCaseExcelRow & { rowNumber?: number }>) {
+  return request<TestCaseImportResult>("/test-cases/import", {
+    method: "POST",
+    body: JSON.stringify({ rows }),
   });
 }

@@ -1,14 +1,26 @@
-import { DeleteOutlined, FileTextOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from "@ant-design/icons";
+import {
+  DeleteOutlined,
+  ExportOutlined,
+  FileTextOutlined,
+  ImportOutlined,
+  PlayCircleOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  StopOutlined,
+} from "@ant-design/icons";
 import { Button, Input, Modal, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnType } from "antd/es/table";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createTestCaseGroup, fetchTestCaseGroups } from "../api/testCaseGroups";
 import {
   createTestCase,
   deleteTestCase,
   deleteTestCases,
+  exportTestCaseRows,
   fetchTestCase,
   fetchTestCases,
+  importTestCases,
   runAllTestCases,
   runTestCase,
   runTestCases,
@@ -18,22 +30,38 @@ import {
 import { RunLogModal } from "../components/RunLogModal";
 import { isBusyStatus, StatusTag } from "../components/StatusTag";
 import { TestCaseModal } from "../components/TestCaseModal";
-import type { RunRequestResult, StopRunResult, TestCaseDetail, TestCaseGroup, TestCaseListItem, TestCasePayload } from "../types";
+import type {
+  RunRequestResult,
+  StopRunResult,
+  TestCaseDetail,
+  TestCaseExcelRow,
+  TestCaseGroup,
+  TestCaseListItem,
+  TestCasePayload,
+} from "../types";
 import { formatDateTime } from "../utils/date";
 
 const ACTIVE_CASE_POLL_INTERVAL_MS = 5000;
+const EXCEL_COLUMNS = {
+  title: "用例名称",
+  groupName: "分组",
+  naturalLanguage: "测试步骤",
+} as const;
 
 export function TestCasePage() {
   const [items, setItems] = useState<TestCaseListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [runningAll, setRunningAll] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [groups, setGroups] = useState<TestCaseGroup[]>([]);
   const [titleKeyword, setTitleKeyword] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCase, setEditingCase] = useState<TestCaseDetail | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [runLogItem, setRunLogItem] = useState<TestCaseListItem | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
 
@@ -175,6 +203,57 @@ export function TestCasePage() {
       await loadTestCases();
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "批量运行失败");
+    }
+  }
+
+  async function handleExportSelected() {
+    if (!selectedRowKeys.length) {
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const { rows } = await exportTestCaseRows(selectedRowKeys);
+      if (!rows.length) {
+        messageApi.warning("没有可导出的用例");
+        return;
+      }
+
+      await writeExportWorkbook(rows);
+      messageApi.success(`已导出 ${rows.length} 条用例`);
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "导出用例失败");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function openImportFile() {
+    importInputRef.current?.click();
+  }
+
+  async function handleImportFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) {
+      return;
+    }
+
+    setImporting(true);
+    try {
+      const rows = await readImportWorkbook(file);
+      if (!rows.length) {
+        messageApi.warning("Excel 中没有可导入的用例");
+        return;
+      }
+
+      const result = await importTestCases(rows);
+      messageApi.success(`已导入 ${result.createdCount} 条，跳过 ${result.skippedCount} 条`);
+      await Promise.all([loadTestCases(), loadGroups()]);
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "导入用例失败");
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -350,7 +429,25 @@ export function TestCasePage() {
             >
               批量删除
             </Button>
+            <Button
+              icon={<ExportOutlined />}
+              loading={exporting}
+              disabled={!selectedRowKeys.length}
+              onClick={() => void handleExportSelected()}
+            >
+              导出
+            </Button>
+            <Button icon={<ImportOutlined />} loading={importing} onClick={openImportFile}>
+              导入
+            </Button>
           </Space>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={(event) => void handleImportFile(event)}
+          />
         </div>
         <Table<TestCaseListItem>
           rowKey="id"
@@ -493,4 +590,59 @@ const statusFilters: ColumnType<TestCaseListItem>["filters"] = [
 
 function toFilters(values: string[]) {
   return Array.from(new Set(values)).map((value) => ({ text: value, value }));
+}
+
+async function writeExportWorkbook(rows: TestCaseExcelRow[]) {
+  const XLSX = await import("xlsx");
+  const worksheet = XLSX.utils.json_to_sheet(toExcelRecords(rows), {
+    header: Object.values(EXCEL_COLUMNS),
+  });
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "用例");
+  XLSX.writeFile(workbook, createExportFileName());
+}
+
+async function readImportWorkbook(file: File) {
+  const XLSX = await import("xlsx");
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) {
+    return [];
+  }
+
+  const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[firstSheetName], { defval: "" });
+  return records.map((record, index) => ({
+    title: getExcelCellText(record, EXCEL_COLUMNS.title),
+    groupName: getExcelCellText(record, EXCEL_COLUMNS.groupName),
+    naturalLanguage: getExcelCellText(record, EXCEL_COLUMNS.naturalLanguage),
+    rowNumber: index + 2,
+  }));
+}
+
+function toExcelRecords(rows: TestCaseExcelRow[]) {
+  return rows.map((row) => ({
+    [EXCEL_COLUMNS.title]: row.title,
+    [EXCEL_COLUMNS.groupName]: row.groupName,
+    [EXCEL_COLUMNS.naturalLanguage]: row.naturalLanguage,
+  }));
+}
+
+function getExcelCellText(record: Record<string, unknown>, column: string) {
+  const value = record[column];
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+}
+
+function createExportFileName() {
+  const now = new Date();
+  const date = [
+    now.getFullYear(),
+    padDatePart(now.getMonth() + 1),
+    padDatePart(now.getDate()),
+  ].join("");
+  const time = [padDatePart(now.getHours()), padDatePart(now.getMinutes()), padDatePart(now.getSeconds())].join("");
+  return `用例导出_${date}_${time}.xlsx`;
+}
+
+function padDatePart(value: number) {
+  return String(value).padStart(2, "0");
 }
