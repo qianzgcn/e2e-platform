@@ -15,8 +15,8 @@ export default defineConfig({
   // 生成的文件统一以 .spec.ts 结尾。
   testMatch: "**/*.spec.ts",
 
-  // 单个测试最长运行时间。MVP 阶段先给 30 秒，避免异常页面长期卡住。
-  timeout: 30_000,
+  // 单个测试最长运行时间，避免复杂流程过早超时。
+  timeout: 60_000,
 
   // 每个断言的默认等待时间。
   expect: {
@@ -36,10 +36,10 @@ export default defineConfig({
     // runner 会通过 PLAYWRIGHT_BASE_URL 注入项目配置里的 baseUrl。
     baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:5173",
 
-    // 当前只需要视频回放，不再输出 trace 和截图。
+    // 成功和失败都保留视频回放，不再输出 trace 和截图。
     trace: "off",
     screenshot: "off",
-    video: "retain-on-failure",
+    video: "on",
 
     // 容器内通常以 root 运行 Chromium，关闭 sandbox 避免启动失败。
     launchOptions: {

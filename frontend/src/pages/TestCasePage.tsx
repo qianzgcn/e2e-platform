@@ -9,6 +9,7 @@ import {
   deleteTestCases,
   fetchTestCase,
   fetchTestCases,
+  runAllTestCases,
   runTestCase,
   runTestCases,
   stopTestCase,
@@ -26,6 +27,7 @@ export function TestCasePage() {
   const [items, setItems] = useState<TestCaseListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [runningAll, setRunningAll] = useState(false);
   const [groups, setGroups] = useState<TestCaseGroup[]>([]);
   const [titleKeyword, setTitleKeyword] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
@@ -176,6 +178,19 @@ export function TestCasePage() {
     }
   }
 
+  async function handleRunAll() {
+    setRunningAll(true);
+    try {
+      const result = await runAllTestCases();
+      showRunRequestMessage(result, "all");
+      await loadTestCases();
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "全量运行失败");
+    } finally {
+      setRunningAll(false);
+    }
+  }
+
   async function handleStop(item: TestCaseListItem) {
     const stop = async () => {
       try {
@@ -216,7 +231,7 @@ export function TestCasePage() {
     messageApi.success("已停止用例");
   }
 
-  function showRunRequestMessage(result: RunRequestResult, mode: "single" | "batch") {
+  function showRunRequestMessage(result: RunRequestResult, mode: "single" | "batch" | "all") {
     const queuedCount = result.runIds.length;
     const skippedCount = result.skippedCases.length;
 
@@ -226,6 +241,21 @@ export function TestCasePage() {
       } else {
         messageApi.warning("该用例正在运行中，已跳过");
       }
+      return;
+    }
+
+    if (mode === "all") {
+      if (queuedCount && skippedCount) {
+        messageApi.success(`已加入 ${queuedCount} 条，跳过 ${skippedCount} 条运行中的用例`);
+        return;
+      }
+
+      if (queuedCount) {
+        messageApi.success(`已加入 ${queuedCount} 条用例到运行队列`);
+        return;
+      }
+
+      messageApi.warning(skippedCount ? "所有用例均在运行中，已跳过" : "暂无用例可运行");
       return;
     }
 
@@ -298,6 +328,9 @@ export function TestCasePage() {
             />
             <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadTestCases()}>
               刷新
+            </Button>
+            <Button icon={<PlayCircleOutlined />} loading={runningAll} onClick={() => void handleRunAll()}>
+              全量运行
             </Button>
           </Space>
           <Space>

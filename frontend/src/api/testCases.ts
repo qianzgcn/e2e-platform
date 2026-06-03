@@ -55,3 +55,9 @@ export function runTestCases(ids: string[]) {
     method: "POST",
   });
 }
+
+export function runAllTestCases() {
+  return request<RunRequestResult>("/test-cases/run-all", {
+    method: "POST",
+  });
+}

@@ -4,7 +4,7 @@ import { prisma } from "../prisma.js";
 import { getLatestArtifacts } from "../services/artifactService.js";
 import { removePlaywrightTestResults } from "../services/cleanupService.js";
 import { resolveScriptGenerationOnSave } from "../services/testCaseScriptGeneration.js";
-import { runTestCase, runTestCases, stopTestCaseRun } from "../services/testCaseRunService.js";
+import { runAllTestCases, runTestCase, runTestCases, stopTestCaseRun } from "../services/testCaseRunService.js";
 
 export const testCasesRouter = Router();
 
@@ -217,6 +217,14 @@ testCasesRouter.delete("/:id", async (req, res) => {
   const ids = parseIds(req.params.id);
   await prisma.testCase.deleteMany({ where: { id: { in: ids } } });
   res.status(204).send();
+});
+
+testCasesRouter.post("/run-all", async (_req, res) => {
+  try {
+    res.json(await runAllTestCases());
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "全量运行失败" });
+  }
 });
 
 testCasesRouter.post("/:id/run", async (req, res) => {

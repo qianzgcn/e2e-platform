@@ -99,6 +99,16 @@ export async function runTestCases(testCaseIds: string[]) {
     throw new Error("用例不存在");
   }
 
+  return submitRunTargets(testCases);
+}
+
+// 全量运行所有用例；活跃态用例会在提交时自动跳过。
+export async function runAllTestCases() {
+  logRun("收到全量运行请求");
+  return submitRunTargets(await findAllRunTargets());
+}
+
+async function submitRunTargets(testCases: RunTargetTestCase[]) {
   const { runnableTestCases, skippedCases } = splitRunTargetsByStatus(testCases);
   const queuedResult = runnableTestCases.length
     ? await createQueuedRunTasks(runnableTestCases)
@@ -109,7 +119,8 @@ export async function runTestCases(testCaseIds: string[]) {
     enqueueRunBatch(queuedResult.tasks);
   }
 
-  logRun("批量运行提交完成", {
+  logRun("运行提交完成", {
+    requestedCount: testCases.length,
     queuedCount: queuedResult.tasks.length,
     skippedCount: allSkippedCases.length,
   });
@@ -662,6 +673,22 @@ async function findRunTargets(testCaseIds: string[]) {
 
   const orderMap = new Map(testCaseIds.map((id, index) => [id, index]));
   return testCases.sort((left, right) => orderMap.get(left.id)! - orderMap.get(right.id)!);
+}
+
+// 查询所有用例，供全量运行使用。
+async function findAllRunTargets() {
+  return (await prisma.testCase.findMany({
+    orderBy: { editedAt: "desc" },
+    select: {
+      id: true,
+      title: true,
+      naturalLanguage: true,
+      status: true,
+      playwrightScript: true,
+      scriptNeedsGeneration: true,
+      scriptGeneratedAt: true,
+    },
+  })) as RunTargetTestCase[];
 }
 
 // 获取当前项目配置和变量。
