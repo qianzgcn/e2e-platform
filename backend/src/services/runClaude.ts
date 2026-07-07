@@ -1,33 +1,14 @@
-import { spawn, type ChildProcess, type SpawnOptionsWithoutStdio } from "node:child_process";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 
-const CLAUDE_COMMAND = "claude";
 const CLAUDE_TIMEOUT = 60 * 60 * 1000;
-const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
 
-const CLAUDE_ARGS = [
-  // -p: 使用 Claude Code 的非交互 print mode，输出完成后立即退出。
-  "-p",
-  // --output-format: 指定 stdout 的输出格式。
-  "--output-format",
-  // stream-json: 实时输出 Claude Code 事件，便于定位卡在哪个工具或阶段。
-  "stream-json",
-  // --verbose: Claude Code 要求 stream-json 输出必须开启 verbose。
-  "--verbose",
-  // --input-format: 指定 stdin 的输入格式。
-  "--input-format",
-  // text: 后端通过 stdin 传入普通文本 prompt。
-  "text",
-  // --no-session-persistence: 每次生成独立执行，不写入或复用会话历史。
-  "--no-session-persistence",
-  // --permission-mode: 指定非交互环境下的权限处理策略。
-  "--permission-mode",
-  // dontAsk: 未被 settings 预批准的工具直接失败，避免服务端卡在确认提示。
-  "dontAsk",
-  // --settings: 显式加载项目内的 Claude Code 权限配置。
-  "--settings",
-  // .claude/settings.json: backend 目录下的受控工具 allowlist。
-  CLAUDE_SETTINGS_PATH,
-];
+// 失败子类型：result 消息的 subtype 落在这里即视为执行失败。
+const FAILURE_RESULT_SUBTYPES = new Set([
+  "error_max_turns",
+  "error_during_execution",
+  "error_max_consecutive_errors",
+  "error_cancelled",
+]);
 
 type RunClaudeOptions = {
   cwd?: string;
@@ -38,249 +19,148 @@ type RunClaudeOptions = {
   onProgress?: (message: string) => void;
 };
 
-export type ClaudeInvocation = {
-  command: string;
-  args: string[];
-  stdin: string;
-};
-
-// 运行 Claude Code CLI，并返回 stdout 文本。
+// 通过 Claude Agent SDK 运行一次生成任务，返回最终 result 文本。
+// 对外契约与原 spawn 版本一致：resolve 成功结果，失败/超时/中止时 reject 一个带 stdout/stderr/killed/signal 字段的 Error。
 export function runClaude(prompt: string, options: RunClaudeOptions = {}) {
   return new Promise<string>((resolve, reject) => {
-    const invocation = createClaudeInvocation(prompt);
     const timeout = options.timeout ?? CLAUDE_TIMEOUT;
-    let stdout = "";
-    let stderr = "";
-    let stdoutBuffer = "";
+    const recentEvents: string[] = [];
     let resultText = "";
     let resultIsError = false;
-    const recentEvents: string[] = [];
+    let resultSubtype = "";
+    let gotResult = false;
     let settled = false;
 
-    const onClaudeEvent = (event: unknown) => {
-      const summary = summarizeClaudeStreamEvent(event);
-
-      if (summary) {
-        pushRecentEvent(recentEvents, summary);
-        options.onProgress?.(summary);
-        logClaude("Claude Code 事件", summary);
-      }
-
-      const result = getClaudeResultEvent(event);
-      if (result) {
-        resultText = result.result ?? resultText;
-        resultIsError = result.isError;
-      }
-    };
-
-    logClaude("执行 Claude Code 命令", {
-      command: invocation.command,
-      args: invocation.args,
-      fullCommand: formatCommand(invocation.command, invocation.args),
-      promptLength: invocation.stdin.length,
-      cwd: options.cwd ?? process.cwd(),
-      timeout,
-    });
-
-    const child = spawn(invocation.command, invocation.args, createClaudeSpawnOptions(options));
-    let timer: NodeJS.Timeout;
-
-    const cleanup = () => {
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onAbort);
-    };
-
-    const onAbort = () => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      cleanup();
-      killProcess(child);
-      const message = options.stopReason ?? "Claude Code 生成已被终止";
-      logClaude("Claude Code 已被手动终止", {
-        stdoutLength: stdout.length,
-        stderrLength: stderr.length,
-        recentEvents,
-      });
-      reject(toClaudeError(message, stdout, stderr, true, "SIGTERM"));
-    };
-
-    timer = setTimeout(() => {
-      settled = true;
-      cleanup();
-      killProcess(child);
-      const message = "Claude Code 生成用例超时，已终止执行";
-      logClaude(message, {
-        timeout,
-        stdoutLength: stdout.length,
-        stderrLength: stderr.length,
-        recentEvents,
-      });
-      reject(toClaudeError(message, stdout, stderr, true, "SIGTERM"));
-    }, timeout);
-
-    options.signal?.addEventListener("abort", onAbort, { once: true });
+    // SDK 自带 AbortController 入口；外部 signal 与超时都通过它转发，统一走 finish() 收尾。
+    const controller = new AbortController();
+    const timer = setTimeout(() => finish("timeout"), timeout);
+    const onExternalAbort = () => finish("abort");
+    options.signal?.addEventListener("abort", onExternalAbort, { once: true });
 
     if (options.signal?.aborted) {
-      onAbort();
+      finish("abort");
       return;
     }
 
-    child.stdin.write(invocation.stdin);
-    child.stdin.end();
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-      stdoutBuffer = consumeClaudeStreamChunk(stdoutBuffer + chunk, onClaudeEvent);
-    });
-
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-      logClaude("Claude Code stderr", { message: truncateText(chunk.trim(), 1_000) });
-    });
-
-    child.on("error", (error) => {
+    function finish(reason: "timeout" | "abort") {
       if (settled) {
         return;
       }
 
       settled = true;
-      cleanup();
-      logClaude("Claude Code 启动失败", { message: error.message });
-      reject(toClaudeError(error.message, stdout, stderr));
-    });
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onExternalAbort);
+      controller.abort();
 
-    child.on("close", (code, signal) => {
-      if (settled) {
-        return;
-      }
+      const message =
+        reason === "timeout"
+          ? "Claude Code 生成用例超时，已终止执行"
+          : options.stopReason ?? "Claude Code 生成已被终止";
 
-      settled = true;
-      cleanup();
-      flushClaudeStreamBuffer(stdoutBuffer, onClaudeEvent);
+      logClaude(reason === "timeout" ? "Claude Code 生成超时" : "Claude Code 已被手动终止", {
+        gotResult,
+        recentEvents,
+      });
 
-      if (code === 0) {
-        logClaude("Claude Code 执行成功", {
-          stdoutLength: stdout.length,
-          stderrLength: stderr.length,
-          resultLength: resultText.length,
-          recentEvents,
+      reject(toClaudeError(message, "", "", true, "SIGTERM"));
+    }
+
+    (async () => {
+      try {
+        logClaude("执行 Claude Code", {
+          cwd: options.cwd ?? process.cwd(),
+          promptLength: prompt.length,
+          timeout,
         });
 
-        if (resultIsError || isClaudeErrorOutput(resultText || stdout)) {
-          reject(toClaudeError(resultText || stdout.trim(), stdout, stderr));
+        // SDK 内部 spawn 自带的 Claude Code 二进制，会透传 env 里的
+        // ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL / ANTHROPIC_MODEL，第三方网关照常工作。
+        const stream = query({
+          prompt,
+          options: {
+            cwd: options.cwd ?? process.cwd(),
+            // dontAsk：未在 settings.allow 中预批准的工具直接失败，等价原 --permission-mode dontAsk。
+            permissionMode: "dontAsk",
+            // 默认即全开，显式写明：加载 backend/.claude/settings.json + skills + CLAUDE.md。
+            settingSources: ["user", "project", "local"],
+            abortController: controller,
+            env: { ...process.env, ...options.env },
+            // 可选：镜像剥离了 SDK 自带二进制时，用全局 claude 兜底。
+            ...(process.env.CLAUDE_CODE_PATH
+              ? { pathToClaudeCodeExecutable: process.env.CLAUDE_CODE_PATH }
+              : {}),
+          },
+        });
+
+        for await (const message of stream) {
+          const summary = summarizeClaudeStreamEvent(message);
+
+          if (summary) {
+            pushRecentEvent(recentEvents, summary);
+            options.onProgress?.(summary);
+            logClaude("Claude Code 事件", summary);
+          }
+
+          if (message.type === "result") {
+            gotResult = true;
+            const result = message as unknown as {
+              result?: string;
+              is_error?: boolean;
+              subtype?: string;
+            };
+            resultText = typeof result.result === "string" ? result.result : resultText;
+            resultIsError = result.is_error === true;
+            resultSubtype = typeof result.subtype === "string" ? result.subtype : "";
+          }
+        }
+
+        if (settled) {
           return;
         }
 
-        resolve(resultText || stdout.trim());
-        return;
+        settled = true;
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onExternalAbort);
+
+        if (!gotResult) {
+          logClaude("Claude Code 未返回结果", { recentEvents });
+          reject(toClaudeError("Claude Code 未返回结果", "", ""));
+          return;
+        }
+
+        if (resultIsError || FAILURE_RESULT_SUBTYPES.has(resultSubtype)) {
+          logClaude("Claude Code 执行失败", {
+            subtype: resultSubtype,
+            resultLength: resultText.length,
+            recentEvents,
+          });
+          reject(toClaudeError(resultText || `Claude Code 执行失败: ${resultSubtype}`, "", ""));
+          return;
+        }
+
+        logClaude("Claude Code 执行成功", {
+          resultLength: resultText.length,
+          recentEvents,
+        });
+        resolve(resultText);
+      } catch (error) {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onExternalAbort);
+
+        const message = (error as Error)?.message || "Claude Code 生成用例失败";
+        logClaude("Claude Code 执行异常", { message, recentEvents });
+        reject(toClaudeError(message, "", ""));
       }
-
-      const message = `Claude Code 退出码异常: ${code ?? "null"}`;
-      logClaude("Claude Code 执行失败", {
-        code,
-        signal,
-        stderr: truncateText(stderr, 2_000),
-        stdoutLength: stdout.length,
-        stderrLength: stderr.length,
-        recentEvents,
-      });
-      reject(toClaudeError(stderr || stdout || message, stdout, stderr, false, signal ?? undefined));
-    });
+    })();
   });
 }
 
-// 生成 Linux 环境下的 Claude Code 调用命令。
-export function createClaudeInvocation(prompt: string): ClaudeInvocation {
-  return {
-    command: CLAUDE_COMMAND,
-    args: [...CLAUDE_ARGS],
-    stdin: prompt,
-  };
-}
-
-// 生成 Linux 环境下的 spawn 配置；参数变更时要同步更新对应注释。
-export function createClaudeSpawnOptions(options: RunClaudeOptions = {}): SpawnOptionsWithoutStdio {
-  return {
-    cwd: options.cwd ?? process.cwd(),
-    // shell: false 让参数原样传给 claude，避免 shell 转义和注入问题。
-    shell: false,
-    // 单独进程组方便停止时同时终止 Claude 及其拉起的工具子进程。
-    detached: true,
-    env: {
-      ...process.env,
-      ...options.env,
-    },
-  };
-}
-
-// 包装 Claude 执行错误，保留 stdout/stderr 供上层写入日志。
-function toClaudeError(message: string, stdout: string, stderr: string, killed = false, signal?: string) {
-  return Object.assign(new Error(message), {
-    stdout,
-    stderr,
-    killed,
-    signal,
-  });
-}
-
-// Claude 有时错误输出在 stdout 且退出码仍为 0，这里统一转成失败。
-function isClaudeErrorOutput(stdout: string) {
-  return stdout.trim().startsWith("Error:");
-}
-
-type ClaudeResultEvent = {
-  result?: string;
-  isError: boolean;
-};
-
-// 处理 Claude Code 的 NDJSON stdout。返回最后一段未完整换行的 buffer。
-function consumeClaudeStreamChunk(buffer: string, onEvent: (event: unknown) => void) {
-  const lines = buffer.split(/\r?\n/);
-  const rest = lines.pop() ?? "";
-
-  for (const line of lines) {
-    consumeClaudeStreamLine(line, onEvent);
-  }
-
-  return rest;
-}
-
-function flushClaudeStreamBuffer(buffer: string, onEvent: (event: unknown) => void) {
-  if (buffer.trim()) {
-    consumeClaudeStreamLine(buffer, onEvent);
-  }
-}
-
-function consumeClaudeStreamLine(line: string, onEvent: (event: unknown) => void) {
-  const trimmed = line.trim();
-
-  if (!trimmed) {
-    return;
-  }
-
-  try {
-    onEvent(JSON.parse(trimmed) as unknown);
-  } catch {
-    logClaude("Claude Code stdout 非 JSON 行", { line: truncateText(trimmed, 1_000) });
-  }
-}
-
-function getClaudeResultEvent(event: unknown): ClaudeResultEvent | null {
-  if (!isRecord(event) || event.type !== "result") {
-    return null;
-  }
-
-  const isError = event.is_error === true || event.subtype === "error";
-  const result = typeof event.result === "string" ? event.result : undefined;
-  return { result, isError };
-}
-
+// 把 SDK 消息转成单行摘要，供 onProgress 与日志使用；格式与旧 stream-json 摘要保持一致。
 export function summarizeClaudeStreamEvent(event: unknown) {
   if (!isRecord(event)) {
     return null;
@@ -301,6 +181,10 @@ export function summarizeClaudeStreamEvent(event: unknown) {
   }
 
   if (event.type === "system") {
+    // 只有 init 子类型携带 tools/cwd；其余 system 事件（status/commands_changed 等）忽略。
+    if (event.subtype !== "init") {
+      return null;
+    }
     const toolCount = Array.isArray(event.tools) ? ` tools=${event.tools.length}` : "";
     const cwd = typeof event.cwd === "string" ? ` cwd=${event.cwd}` : "";
     return `初始化${cwd}${toolCount}`;
@@ -401,30 +285,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-// 拼接用于日志查看的完整命令。
-function formatCommand(command: string, args: string[]) {
-  return [command, ...args.map(quoteCommandArg)].join(" ");
+// 包装 Claude 执行错误，保留 stdout/stderr 供上层写入日志（SDK 模式下 stdout/stderr 不再可用，留空串保持字段形状）。
+function toClaudeError(message: string, stdout: string, stderr: string, killed = false, signal?: string) {
+  return Object.assign(new Error(message), {
+    stdout,
+    stderr,
+    killed,
+    signal,
+  });
 }
 
-// 为日志里的命令参数补充引号。
-function quoteCommandArg(value: string) {
-  return `"${value.replaceAll('"', '\\"')}"`;
-}
-
-// 输出 Claude CLI 日志。
+// 输出 Claude 事件日志。
 function logClaude(message: string, data?: unknown) {
   console.log(`[runClaude] ${message}`, data ?? "");
-}
-
-// 终止 Claude 子进程。
-function killProcess(child: ChildProcess) {
-  if (!child.pid) {
-    return;
-  }
-
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    child.kill("SIGTERM");
-  }
 }
