@@ -24,7 +24,6 @@ export async function generateScripts(testCases: ScriptSource[], baseUrl: string
   }
 
   const prompt = buildPrompt(testCases, baseUrl);
-  console.log("提示词", prompt);
   logAgent("准备调用 Claude Code", {
     caseCount: testCases.length,
     caseIds: testCases.map((testCase) => testCase.id),
@@ -44,15 +43,8 @@ export async function generateScripts(testCases: ScriptSource[], baseUrl: string
       caseIds: testCases.map((testCase) => testCase.id),
     });
   } catch (error) {
-    const result = error as { stdout?: string; stderr?: string; message?: string; killed?: boolean; signal?: string };
-    const message = getClaudeErrorMessage(result);
-    logAgent("Claude Code 生成失败", {
-      stderr: result.stderr,
-      stdout: result.stdout,
-      message,
-      killed: result.killed,
-      signal: result.signal,
-    });
+    const message = error instanceof Error ? error.message : "Claude 生成用例失败";
+    logAgent("Claude 生成失败", { message });
     throw new Error(message);
   }
 }
@@ -81,15 +73,6 @@ export function buildPrompt(testCases: ScriptSource[], baseUrl: string) {
 输入数据：
 ${JSON.stringify(payload, null, 2)}
 `.trim();
-}
-
-// 统一转换 Claude 执行错误信息。
-function getClaudeErrorMessage(error: { stdout?: string; stderr?: string; message?: string; killed?: boolean; signal?: string }) {
-  if (error.killed || error.signal === "SIGTERM") {
-    return error.message || "Claude Code 生成已被终止";
-  }
-
-  return error.stderr || error.stdout || error.message || "Claude Code 生成用例失败";
 }
 
 // 输出 agent 服务日志。

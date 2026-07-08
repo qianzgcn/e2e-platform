@@ -50,14 +50,14 @@ export function toSkippedRunCase(testCase: RunTargetStatusView): SkippedRunCase 
 export function createInterruptedRunRecoveryArgs(now: Date) {
   return {
     testCase: {
-      where: { status: { in: [...ACTIVE_STATUSES] } },
+      where: { status: { in: ACTIVE_STATUSES } },
       data: {
         status: "failed" as const,
         lastFailureReason: INTERRUPTED_RUN_FAILURE_REASON,
       },
     },
     runLog: {
-      where: { status: { in: [...ACTIVE_STATUSES] } },
+      where: { status: { in: ACTIVE_STATUSES } },
       data: {
         status: "failed" as const,
         failureReason: INTERRUPTED_RUN_FAILURE_REASON,

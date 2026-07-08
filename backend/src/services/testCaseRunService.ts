@@ -146,7 +146,7 @@ export async function stopTestCaseRun(testCaseId: string): Promise<StopRunResult
   const activeRunLog = await prisma.runLog.findFirst({
     where: {
       testCaseId,
-      status: { in: [...ACTIVE_STATUSES] },
+      status: { in: ACTIVE_STATUSES },
       finishedAt: null,
     },
     orderBy: { startedAt: "desc" },
@@ -293,7 +293,7 @@ async function processRuns(tasks: RunTask[]) {
     await Promise.all(
       tasks.map((task) => {
         appendGenerationLog(task, `运行批次失败：${message}`);
-        return markFinished(task.runLogId, task.testCase.id, "failed", getGenerationLog(task), "", message);
+        return markFinished(task.runLogId, task.testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message });
       }),
     );
   } finally {
@@ -376,7 +376,7 @@ async function executeTaskWithIsolation(task: RunTask, baseUrl: string) {
       testCaseId: task.testCase.id,
       message,
     });
-    await markFinished(task.runLogId, task.testCase.id, "failed", getGenerationLog(task), "", message);
+    await markFinished(task.runLogId, task.testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message });
   }
 }
 
@@ -432,7 +432,7 @@ async function collectGenerationItems(tasks: RunTask[], project: ProjectConfig, 
         testCaseId: testCase.id,
         message,
       });
-      await markFinished(task.runLogId, testCase.id, "failed", getGenerationLog(task), "", message);
+      await markFinished(task.runLogId, testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message });
     }
   }
 
@@ -487,7 +487,7 @@ async function generateScriptChunk(generationItems: GenerationItem[], project: P
       message,
     });
     await Promise.all(
-      generationTasks.map((task) => markFinished(task.runLogId, task.testCase.id, "failed", getGenerationLog(task), "", message)),
+      generationTasks.map((task) => markFinished(task.runLogId, task.testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message })),
     );
     return;
   } finally {
@@ -563,7 +563,7 @@ async function executeTask(task: RunTask, baseUrl: string) {
       runLogId: task.runLogId,
       testCaseId: latestTestCase.id,
     });
-    await markFinished(task.runLogId, latestTestCase.id, "success", getGenerationLog(task), result.stderr);
+    await markFinished(task.runLogId, latestTestCase.id, "success", { stdout: getGenerationLog(task), stderr: result.stderr });
     return;
   }
 
@@ -573,7 +573,11 @@ async function executeTask(task: RunTask, baseUrl: string) {
     testCaseId: latestTestCase.id,
     failureReason: result.failureReason,
   });
-  await markFinished(task.runLogId, latestTestCase.id, "failed", getGenerationLog(task), result.stderr, result.failureReason);
+  await markFinished(task.runLogId, latestTestCase.id, "failed", {
+    stdout: getGenerationLog(task),
+    stderr: result.stderr,
+    failureReason: result.failureReason,
+  });
 }
 
 // 读取 Claude 生成的 spec 文件，并保存回数据库。
@@ -591,7 +595,7 @@ async function saveGeneratedScript(task: RunTask) {
         where: {
           id: task.runLogId,
           testCaseId: task.testCase.id,
-          status: { in: [...ACTIVE_STATUSES] },
+          status: { in: ACTIVE_STATUSES },
           finishedAt: null,
         },
         select: { id: true },
@@ -604,7 +608,7 @@ async function saveGeneratedScript(task: RunTask) {
       const updated = await tx.testCase.updateMany({
         where: {
           id: task.testCase.id,
-          status: { in: [...ACTIVE_STATUSES] },
+          status: { in: ACTIVE_STATUSES },
         },
         data: {
           playwrightScript: script,
@@ -639,14 +643,11 @@ async function saveGeneratedScript(task: RunTask) {
       testCaseId: task.testCase.id,
       specPath,
     });
-    await markFinished(
-      task.runLogId,
-      task.testCase.id,
-      "failed",
-      getGenerationLog(task),
-      "",
-      `Agent 未生成用例文件: ${task.testCase.id}.spec.ts`,
-    );
+    await markFinished(task.runLogId, task.testCase.id, "failed", {
+      stdout: getGenerationLog(task),
+      stderr: "",
+      failureReason: `Agent 未生成用例文件: ${task.testCase.id}.spec.ts`,
+    });
     return false;
   }
 }
@@ -738,7 +739,7 @@ async function updateStatus(runLogId: number, testCaseId: string, status: Shared
       where: {
         id: runLogId,
         testCaseId,
-        status: { in: [...ACTIVE_STATUSES] },
+        status: { in: ACTIVE_STATUSES },
         finishedAt: null,
       },
       data: { status },
@@ -752,7 +753,7 @@ async function updateStatus(runLogId: number, testCaseId: string, status: Shared
     const testCaseResult = await tx.testCase.updateMany({
       where: {
         id: testCaseId,
-        status: { in: [...ACTIVE_STATUSES] },
+        status: { in: ACTIVE_STATUSES },
       },
       data: { status },
     });
@@ -766,9 +767,7 @@ async function markFinished(
   runLogId: number,
   testCaseId: string,
   status: "success" | "failed",
-  stdout: string,
-  stderr: string,
-  failureReason?: string,
+  { stdout, stderr, failureReason }: { stdout: string; stderr: string; failureReason?: string },
 ) {
   const finishedAt = new Date();
   logRun("标记运行结束", {
@@ -784,7 +783,7 @@ async function markFinished(
       where: {
         id: runLogId,
         testCaseId,
-        status: { in: [...ACTIVE_STATUSES] },
+        status: { in: ACTIVE_STATUSES },
         finishedAt: null,
       },
       data: {
@@ -804,7 +803,7 @@ async function markFinished(
     await tx.testCase.updateMany({
       where: {
         id: testCaseId,
-        status: { in: [...ACTIVE_STATUSES] },
+        status: { in: ACTIVE_STATUSES },
       },
       data: {
         status,
@@ -895,7 +894,7 @@ function removeQueuedTasks(runLogId: number) {
 async function markRunsStopped(targets: StopTarget[]) {
   await Promise.all(
     dedupeStopTargets(targets).map((target) =>
-      markFinished(target.runLogId, target.testCaseId, "failed", createGenerationLog(USER_STOP_FAILURE_REASON), "", USER_STOP_FAILURE_REASON),
+      markFinished(target.runLogId, target.testCaseId, "failed", { stdout: createGenerationLog(USER_STOP_FAILURE_REASON), stderr: "", failureReason: USER_STOP_FAILURE_REASON }),
     ),
   );
 }
@@ -952,7 +951,7 @@ async function persistGenerationLog(task: RunTask) {
       where: {
         id: task.runLogId,
         testCaseId: task.testCase.id,
-        status: { in: [...ACTIVE_STATUSES] },
+        status: { in: ACTIVE_STATUSES },
         finishedAt: null,
       },
       data: {
@@ -970,19 +969,7 @@ async function persistGenerationLog(task: RunTask) {
 
 function formatLogTime(date: Date) {
   const pad = (value: number) => String(value).padStart(2, "0");
-  return [
-    date.getFullYear(),
-    "-",
-    pad(date.getMonth() + 1),
-    "-",
-    pad(date.getDate()),
-    " ",
-    pad(date.getHours()),
-    ":",
-    pad(date.getMinutes()),
-    ":",
-    pad(date.getSeconds()),
-  ].join("");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 function truncateLogMessage(message: string) {
