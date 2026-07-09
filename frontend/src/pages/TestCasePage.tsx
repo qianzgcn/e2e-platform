@@ -8,7 +8,7 @@ import {
   ReloadOutlined,
   StopOutlined,
 } from "@ant-design/icons";
-import { Button, Input, Modal, Space, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Button, Input, Modal, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnType } from "antd/es/table";
 import type { ChangeEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -30,6 +30,7 @@ import {
 import { RunLogModal } from "../components/RunLogModal";
 import { isBusyStatus, StatusTag } from "../components/StatusTag";
 import { TestCaseModal } from "../components/TestCaseModal";
+import { useProject } from "../ProjectContext";
 import type {
   RunRequestResult,
   StopRunResult,
@@ -49,6 +50,7 @@ const EXCEL_COLUMNS = {
 } as const;
 
 export function TestCasePage() {
+  const { currentProjectId } = useProject();
   const [items, setItems] = useState<TestCaseListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -69,12 +71,16 @@ export function TestCasePage() {
   const groupFilters = useMemo(() => toFilters(items.map((item) => item.groupName)), [items]);
 
   const loadTestCases = useCallback(async (showLoading = true) => {
+    if (currentProjectId == null) {
+      setItems([]);
+      return;
+    }
     if (showLoading) {
       setLoading(true);
     }
 
     try {
-      const testCases = await fetchTestCases(titleKeyword);
+      const testCases = await fetchTestCases(currentProjectId, titleKeyword);
       setItems(testCases);
       setSelectedRowKeys((current) => current.filter((id) => testCases.some((item) => item.id === id)));
     } catch (error) {
@@ -84,15 +90,19 @@ export function TestCasePage() {
         setLoading(false);
       }
     }
-  }, [messageApi, titleKeyword]);
+  }, [currentProjectId, messageApi, titleKeyword]);
 
   const loadGroups = useCallback(async () => {
+    if (currentProjectId == null) {
+      setGroups([]);
+      return;
+    }
     try {
-      setGroups(await fetchTestCaseGroups());
+      setGroups(await fetchTestCaseGroups(currentProjectId));
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "加载分组失败");
     }
-  }, [messageApi]);
+  }, [currentProjectId, messageApi]);
 
   useEffect(() => {
     void loadTestCases();
@@ -150,8 +160,11 @@ export function TestCasePage() {
   }
 
   async function handleCreateGroup(name: string) {
+    if (currentProjectId == null) {
+      return undefined;
+    }
     try {
-      const group = await createTestCaseGroup(name);
+      const group = await createTestCaseGroup(currentProjectId, name);
       setGroups((current) => [...current, group]);
       messageApi.success("分组已创建");
       return group;
@@ -235,7 +248,7 @@ export function TestCasePage() {
   async function handleImportFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
-    if (!file) {
+    if (!file || currentProjectId == null) {
       return;
     }
 
@@ -247,7 +260,7 @@ export function TestCasePage() {
         return;
       }
 
-      const result = await importTestCases(rows);
+      const result = await importTestCases(currentProjectId, rows);
       messageApi.success(`已导入 ${result.createdCount} 条，跳过 ${result.skippedCount} 条`);
       await Promise.all([loadTestCases(), loadGroups()]);
     } catch (error) {
@@ -258,9 +271,12 @@ export function TestCasePage() {
   }
 
   async function handleRunAll() {
+    if (currentProjectId == null) {
+      return;
+    }
     setRunningAll(true);
     try {
-      const result = await runAllTestCases();
+      const result = await runAllTestCases(currentProjectId);
       showRunRequestMessage(result, "all");
       await loadTestCases();
     } catch (error) {
@@ -284,7 +300,7 @@ export function TestCasePage() {
     if (item.status === "generating") {
       modal.confirm({
         title: "停止用例生成",
-        content: "当前 Claude 小批次会一起停止，同批生成中的用例将标记为失败。",
+        content: "确认停止该用例的生成吗？",
         okText: "停止",
         okButtonProps: { danger: true },
         cancelText: "取消",
@@ -303,7 +319,7 @@ export function TestCasePage() {
     }
 
     if (result.affectedTestCaseIds.length > 1) {
-      messageApi.success(`已停止当前生成小批次，共 ${result.affectedTestCaseIds.length} 条用例`);
+      messageApi.success(`已停止，共 ${result.affectedTestCaseIds.length} 条用例`);
       return;
     }
 
@@ -391,12 +407,15 @@ export function TestCasePage() {
           </Typography.Title>
           <Typography.Text type="secondary">维护自然语言用例并执行 Playwright 脚本</Typography.Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+        <Button type="primary" icon={<PlusOutlined />} disabled={currentProjectId == null} onClick={openCreateModal}>
           新增用例
         </Button>
       </div>
 
-      <div className="content-panel p-4">
+      {currentProjectId == null ? (
+        <Alert type="info" showIcon message="请先在顶部选择一个项目" />
+      ) : (
+        <div className="content-panel p-4">
         <div className="mb-3 flex items-center justify-between">
           <Space>
             <Input.Search
@@ -563,6 +582,7 @@ export function TestCasePage() {
           scroll={{ x: "max-content" }}
         />
       </div>
+      )}
 
       <TestCaseModal
         open={modalOpen}

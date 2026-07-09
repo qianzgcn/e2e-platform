@@ -7,6 +7,7 @@ export type TestCaseListItem = {
   id: string;
   title: string;
   groupId: number;
+  projectId: number;
   groupName: string;
   status: TestCaseStatus;
   scriptNeedsGeneration: boolean;
@@ -49,6 +50,7 @@ export type TestCaseImportResult = {
 
 export type TestCaseGroup = {
   id: number;
+  projectId: number;
   name: string;
   createdAt: string;
   updatedAt: string;

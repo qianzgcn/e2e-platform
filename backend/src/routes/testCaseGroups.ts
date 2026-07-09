@@ -3,11 +3,14 @@ import { prisma } from "../prisma.js";
 
 export const testCaseGroupsRouter = Router();
 
-testCaseGroupsRouter.get("/", async (_req, res) => {
+testCaseGroupsRouter.get("/", async (req, res) => {
+  const projectId = Number(req.query.projectId);
   const groups = await prisma.testCaseGroup.findMany({
+    where: Number.isInteger(projectId) ? { projectId } : undefined,
     orderBy: { createdAt: "asc" },
     select: {
       id: true,
+      projectId: true,
       name: true,
       createdAt: true,
       updatedAt: true,
@@ -18,15 +21,15 @@ testCaseGroupsRouter.get("/", async (_req, res) => {
 });
 
 testCaseGroupsRouter.post("/", async (req, res) => {
-  const { name } = req.body;
+  const { name, projectId } = req.body;
 
-  if (!name) {
-    res.status(400).json({ message: "分组名称必填" });
+  if (!name || !Number.isInteger(projectId)) {
+    res.status(400).json({ message: "分组名称和 projectId 必填" });
     return;
   }
 
   const group = await prisma.testCaseGroup.create({
-    data: { name },
+    data: { name, projectId },
   });
 
   res.status(201).json(group);

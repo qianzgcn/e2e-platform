@@ -12,12 +12,14 @@ type FailedTestCaseRow = {
   lastRunAt: Date | null;
 };
 
-dashboardRouter.get("/", async (_req, res) => {
+dashboardRouter.get("/", async (req, res) => {
+  const projectId = Number(req.query.projectId);
+  const where = Number.isInteger(projectId) ? { projectId } : undefined;
   const [totalCases, successCases, recentFailedCases] = await Promise.all([
-    prisma.testCase.count(),
-    prisma.testCase.count({ where: { status: "success" } }),
+    prisma.testCase.count({ where }),
+    prisma.testCase.count({ where: { ...where, status: "success" } }),
     prisma.testCase.findMany({
-      where: { status: "failed" },
+      where: { ...where, status: "failed" },
       orderBy: { lastRunAt: "desc" },
       take: 5,
       select: {

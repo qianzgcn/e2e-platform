@@ -3,7 +3,7 @@ import path from "node:path";
 import mariadb from "mariadb";
 import { databaseUrlToMariaDbConfig } from "../prisma.js";
 
-const repeatableSqlFiles = ["init.sql", "add_column.sql", "change_column.sql"];
+const repeatableSqlFiles = ["init.sql", "add_column.sql", "change_column.sql", "add_project_id.sql"];
 
 function splitSqlStatements(sql: string): string[] {
   return sql

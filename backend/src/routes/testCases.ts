@@ -12,6 +12,7 @@ type TestCaseListRow = {
   id: string;
   title: string;
   groupId: number;
+  projectId: number;
   group: {
     name: string;
   };
@@ -47,21 +48,20 @@ type SkippedImportTestCaseRow = Partial<NormalizedImportTestCaseRow> & {
   reason: string;
 };
 
-testCasesRouter.get("/", async (_req, res) => {
-  const title = typeof _req.query.title === "string" ? _req.query.title.trim() : "";
+testCasesRouter.get("/", async (req, res) => {
+  const title = typeof req.query.title === "string" ? req.query.title.trim() : "";
+  const projectId = Number(req.query.projectId);
   const testCases = await prisma.testCase.findMany({
-    where: title
-      ? {
-          title: {
-            contains: title,
-          },
-        }
-      : undefined,
+    where: {
+      ...(title ? { title: { contains: title } } : {}),
+      ...(Number.isInteger(projectId) ? { projectId } : {}),
+    },
     orderBy: { editedAt: "desc" },
     select: {
       id: true,
       title: true,
       groupId: true,
+      projectId: true,
       group: {
         select: {
           name: true,
@@ -81,6 +81,7 @@ testCasesRouter.get("/", async (_req, res) => {
       id: testCase.id,
       title: testCase.title,
       groupId: testCase.groupId,
+      projectId: testCase.projectId,
       groupName: testCase.group.name,
       status: testCase.status,
       scriptNeedsGeneration: testCase.scriptNeedsGeneration,
@@ -108,6 +109,7 @@ testCasesRouter.get("/:id", async (req, res) => {
     id: testCase.id,
     title: testCase.title,
     groupId: testCase.groupId,
+    projectId: testCase.projectId,
     groupName: testCase.group.name,
     naturalLanguage: testCase.naturalLanguage,
     playwrightScript: testCase.playwrightScript,
@@ -143,11 +145,18 @@ testCasesRouter.post("/", async (req, res) => {
     return;
   }
 
+  const group = await prisma.testCaseGroup.findUnique({ where: { id: groupId }, select: { projectId: true } });
+  if (!group) {
+    res.status(400).json({ message: "分组不存在" });
+    return;
+  }
+
   const testCase = await prisma.testCase.create({
     data: {
       id: uuidv4(),
       title,
       groupId,
+      projectId: group.projectId,
       naturalLanguage,
       scriptNeedsGeneration: true,
       editedAt: new Date(),
@@ -184,6 +193,12 @@ testCasesRouter.put("/:id", async (req, res) => {
     return;
   }
 
+  const group = await prisma.testCaseGroup.findUnique({ where: { id: groupId }, select: { projectId: true } });
+  if (!group) {
+    res.status(400).json({ message: "分组不存在" });
+    return;
+  }
+
   const scriptGeneration = resolveScriptGenerationOnSave(existing, {
     naturalLanguage,
     scriptNeedsGeneration: requestedScriptNeedsGeneration,
@@ -194,6 +209,7 @@ testCasesRouter.put("/:id", async (req, res) => {
       data: {
         title,
         groupId,
+        projectId: group.projectId,
         naturalLanguage,
         scriptNeedsGeneration: scriptGeneration.scriptNeedsGeneration,
         ...(scriptGeneration.clearScript
@@ -237,9 +253,14 @@ testCasesRouter.delete("/:id", async (req, res) => {
   res.status(204).send();
 });
 
-testCasesRouter.post("/run-all", async (_req, res) => {
+testCasesRouter.post("/run-all", async (req, res) => {
+  const projectId = Number(req.query.projectId);
+  if (!Number.isInteger(projectId)) {
+    res.status(400).json({ message: "projectId 必填" });
+    return;
+  }
   try {
-    res.json(await runAllTestCases());
+    res.json(await runAllTestCases(projectId));
   } catch (error) {
     res.status(400).json({ message: error instanceof Error ? error.message : "全量运行失败" });
   }
@@ -270,6 +291,11 @@ testCasesRouter.post("/export-rows", async (req, res) => {
 });
 
 testCasesRouter.post("/import", async (req, res) => {
+  const projectId = Number(req.body.projectId);
+  if (!Number.isInteger(projectId)) {
+    res.status(400).json({ message: "projectId 必填" });
+    return;
+  }
   const rows = Array.isArray(req.body.rows) ? (req.body.rows as ImportTestCaseRow[]) : [];
   const { validRows, skippedRows } = normalizeImportRows(rows);
 
@@ -285,7 +311,7 @@ testCasesRouter.post("/import", async (req, res) => {
 
   const result = await prisma.$transaction(async (tx) => {
     const existingTestCases = await tx.testCase.findMany({
-      where: { title: { in: validRows.map((row) => row.title) } },
+      where: { projectId, title: { in: validRows.map((row) => row.title) } },
       select: { title: true },
     });
     const existingTitles = new Set(existingTestCases.map((testCase) => testCase.title.trim()));
@@ -314,8 +340,8 @@ testCasesRouter.post("/import", async (req, res) => {
     const groups = await Promise.all(
       groupNames.map((name) =>
         tx.testCaseGroup.upsert({
-          where: { name },
-          create: { name },
+          where: { projectId_name: { projectId, name } },
+          create: { projectId, name },
           update: {},
         }),
       ),
@@ -329,6 +355,7 @@ testCasesRouter.post("/import", async (req, res) => {
         id: createdIds[index],
         title: row.title,
         groupId: groupIdByName.get(row.groupName)!,
+        projectId,
         naturalLanguage: row.naturalLanguage,
         playwrightScript: null,
         scriptNeedsGeneration: true,

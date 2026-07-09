@@ -25,11 +25,13 @@ enum RunLogStatus {
 
 model Project {
   id        Int      @id @default(autoincrement())
-  name      String
+  name      String   @unique
   baseUrl   String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   variables ProjectVariable[]
+  groups    TestCaseGroup[]
+  testCases TestCase[]
 }
 
 model ProjectVariable {
@@ -48,10 +50,15 @@ model ProjectVariable {
 
 model TestCaseGroup {
   id        Int        @id @default(autoincrement())
-  name      String     @unique
+  projectId Int
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
   testCases TestCase[]
+
+  @@unique([projectId, name])
+  @@index([projectId])
 }
 
 model TestCase {
@@ -59,6 +66,8 @@ model TestCase {
   title             String
   groupId           Int
   group             TestCaseGroup  @relation(fields: [groupId], references: [id])
+  projectId         Int
+  project           Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   naturalLanguage   String         @db.Text
   playwrightScript  String?        @db.LongText
   scriptNeedsGeneration Boolean    @default(true)
@@ -72,6 +81,7 @@ model TestCase {
   runLogs           RunLog[]
 
   @@index([groupId])
+  @@index([projectId])
 }
 
 model RunLog {

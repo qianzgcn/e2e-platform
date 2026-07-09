@@ -1,14 +1,14 @@
 import { request } from "./client";
 import type { TestCaseGroup } from "../types";
 
-export function fetchTestCaseGroups() {
-  return request<TestCaseGroup[]>("/test-case-groups");
+export function fetchTestCaseGroups(projectId: number) {
+  return request<TestCaseGroup[]>(`/test-case-groups?projectId=${projectId}`);
 }
 
-export function createTestCaseGroup(name: string) {
+export function createTestCaseGroup(projectId: number, name: string) {
   return request<TestCaseGroup>("/test-case-groups", {
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ projectId, name }),
   });
 }
 

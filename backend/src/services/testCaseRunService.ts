@@ -30,6 +30,7 @@ type ProjectVariable = {
 type RunTargetTestCase = {
   id: string;
   title: string;
+  projectId: number;
   naturalLanguage: string;
   status: TestCaseRunStatus;
   playwrightScript: string | null;
@@ -124,10 +125,10 @@ export async function runTestCases(testCaseIds: string[]) {
   return submitRunTargets(testCases);
 }
 
-// 全量运行所有用例；活跃态用例会在提交时自动跳过。
-export async function runAllTestCases() {
-  logRun("收到全量运行请求");
-  return submitRunTargets(await findAllRunTargets());
+// 全量运行指定项目的用例；活跃态用例会在提交时自动跳过。
+export async function runAllTestCases(projectId: number) {
+  logRun("收到全量运行请求", { projectId });
+  return submitRunTargets(await findAllRunTargets(projectId));
 }
 
 async function submitRunTargets(testCases: RunTargetTestCase[]) {
@@ -137,7 +138,7 @@ async function submitRunTargets(testCases: RunTargetTestCase[]) {
     return { runIds: [], skippedCases };
   }
 
-  const project = await getProject();
+  const project = await getProject(runnableTestCases[0].projectId);
   const queuedResult = await createQueuedRunTasks(runnableTestCases, project.baseUrl);
   dispatchTasks(queuedResult.tasks, project);
 
@@ -537,6 +538,7 @@ async function findRunTargets(testCaseIds: string[]) {
     select: {
       id: true,
       title: true,
+      projectId: true,
       naturalLanguage: true,
       status: true,
       playwrightScript: true,
@@ -549,13 +551,15 @@ async function findRunTargets(testCaseIds: string[]) {
   return testCases.sort((left, right) => orderMap.get(left.id)! - orderMap.get(right.id)!);
 }
 
-// 查询所有用例，供全量运行使用。
-async function findAllRunTargets() {
+// 查询指定项目的所有用例，供全量运行使用。
+async function findAllRunTargets(projectId: number) {
   return (await prisma.testCase.findMany({
+    where: { projectId },
     orderBy: { editedAt: "desc" },
     select: {
       id: true,
       title: true,
+      projectId: true,
       naturalLanguage: true,
       status: true,
       playwrightScript: true,
@@ -565,18 +569,16 @@ async function findAllRunTargets() {
   })) as RunTargetTestCase[];
 }
 
-// 获取当前项目配置和变量。
-async function getProject() {
-  const project = await prisma.project.findFirst({
-    orderBy: { id: "asc" },
-    include: {
-      variables: true,
-    },
+// 获取指定项目的配置和变量。
+async function getProject(projectId: number) {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { variables: true },
   });
 
   if (!project) {
-    logRun("没有项目配置，无法运行用例");
-    throw new Error("请先在配置页新建项目");
+    logRun("项目不存在，无法运行用例", { projectId });
+    throw new Error("项目不存在");
   }
 
   logRun("读取项目配置", {

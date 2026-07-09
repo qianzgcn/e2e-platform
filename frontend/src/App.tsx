@@ -1,9 +1,27 @@
 import { DashboardOutlined, ProjectOutlined, SettingOutlined } from "@ant-design/icons";
-import { ConfigProvider, Layout, Menu, Typography } from "antd";
+import { ConfigProvider, Layout, Menu, Select, Typography } from "antd";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { ProjectProvider, useProject } from "./ProjectContext";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ProjectSettingsPage } from "./pages/ProjectSettingsPage";
 import { TestCasePage } from "./pages/TestCasePage";
+
+// 顶部项目切换框；切换后所有页面按当前 projectId 重新加载。
+function ProjectSwitcher() {
+  const { projects, currentProjectId, setCurrentProjectId, loading } = useProject();
+  return (
+    <Select
+      loading={loading}
+      value={currentProjectId ?? undefined}
+      placeholder="选择项目"
+      showSearch
+      optionFilterProp="label"
+      style={{ width: 240 }}
+      options={projects.map((project) => ({ value: project.id, label: project.name }))}
+      onChange={(value: number) => setCurrentProjectId(value)}
+    />
+  );
+}
 
 export default function App() {
   const location = useLocation();
@@ -21,36 +39,40 @@ export default function App() {
         },
       }}
     >
-      <Layout className="app-shell">
-        <Layout.Sider width={232} theme="light" className="border-r border-gray-200">
-          <div className="px-5 py-5">
-            <Typography.Title level={4} className="!mb-0">
-              AI 测试平台
-            </Typography.Title>
-            <Typography.Text type="secondary">E2E Automation</Typography.Text>
-          </div>
-          <Menu
-            mode="inline"
-            selectedKeys={[selectedKey]}
-            onClick={({ key }) => navigate(key)}
-            items={[
-              { key: "/dashboard", icon: <DashboardOutlined />, label: "看板" },
-              { key: "/test-cases", icon: <ProjectOutlined />, label: "用例管理" },
-              { key: "/settings", icon: <SettingOutlined />, label: "配置" },
-            ]}
-          />
-        </Layout.Sider>
-        <Layout>
-          <Layout.Content className="px-8 py-7">
-            <Routes>
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
-              <Route path="/dashboard" element={<DashboardPage />} />
-              <Route path="/test-cases" element={<TestCasePage />} />
-              <Route path="/settings" element={<ProjectSettingsPage />} />
-            </Routes>
-          </Layout.Content>
+      <ProjectProvider>
+        <Layout className="app-shell">
+          <Layout.Sider width={232} theme="light" className="border-r border-gray-200">
+            <div className="px-5 py-5">
+              <Typography.Title level={4} className="!mb-0">
+                AI 测试平台
+              </Typography.Title>
+            </div>
+            <Menu
+              mode="inline"
+              selectedKeys={[selectedKey]}
+              onClick={({ key }) => navigate(key)}
+              items={[
+                { key: "/dashboard", icon: <DashboardOutlined />, label: "看板" },
+                { key: "/test-cases", icon: <ProjectOutlined />, label: "用例管理" },
+                { key: "/settings", icon: <SettingOutlined />, label: "配置" },
+              ]}
+            />
+          </Layout.Sider>
+          <Layout>
+            <Layout.Header className="flex items-center border-b border-gray-200 bg-white px-6">
+              <ProjectSwitcher />
+            </Layout.Header>
+            <Layout.Content className="px-8 py-7">
+              <Routes>
+                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/dashboard" element={<DashboardPage />} />
+                <Route path="/test-cases" element={<TestCasePage />} />
+                <Route path="/settings" element={<ProjectSettingsPage />} />
+              </Routes>
+            </Layout.Content>
+          </Layout>
         </Layout>
-      </Layout>
+      </ProjectProvider>
     </ConfigProvider>
   );
 }

@@ -10,9 +10,12 @@ import type {
   TestCasePayload,
 } from "../types";
 
-export function fetchTestCases(title?: string) {
-  const query = title ? `?title=${encodeURIComponent(title)}` : "";
-  return request<TestCaseListItem[]>(`/test-cases${query}`);
+export function fetchTestCases(projectId: number, title?: string) {
+  const params = new URLSearchParams({ projectId: String(projectId) });
+  if (title) {
+    params.set("title", title);
+  }
+  return request<TestCaseListItem[]>(`/test-cases?${params.toString()}`);
 }
 
 export function fetchTestCase(id: string) {
@@ -65,8 +68,8 @@ export function runTestCases(ids: string[]) {
   });
 }
 
-export function runAllTestCases() {
-  return request<RunRequestResult>("/test-cases/run-all", {
+export function runAllTestCases(projectId: number) {
+  return request<RunRequestResult>(`/test-cases/run-all?projectId=${projectId}`, {
     method: "POST",
   });
 }
@@ -78,9 +81,9 @@ export function exportTestCaseRows(ids: string[]) {
   });
 }
 
-export function importTestCases(rows: Array<TestCaseExcelRow & { rowNumber?: number }>) {
+export function importTestCases(projectId: number, rows: Array<TestCaseExcelRow & { rowNumber?: number }>) {
   return request<TestCaseImportResult>("/test-cases/import", {
     method: "POST",
-    body: JSON.stringify({ rows }),
+    body: JSON.stringify({ projectId, rows }),
   });
 }
