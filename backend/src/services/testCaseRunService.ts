@@ -1,10 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { generateScripts, type ScriptSource } from "./agentService.js";
-import { cleanupPlaywrightCliWorkspace } from "./cleanupService.js";
+import { generateScript, type ScriptSource } from "./agentService.js";
+import { AsyncQueue } from "./asyncQueue.js";
 import { prisma } from "../prisma.js";
 import { runPlaywright } from "./runnerService.js";
-import { chunkByAgentGenerationBatchSize } from "./runBatch.js";
 import { shouldGenerateScript } from "./testCaseScriptGeneration.js";
 import {
   ACTIVE_STATUSES,
@@ -41,18 +40,14 @@ type RunTargetTestCase = {
 type RunTask = {
   runLogId: number;
   testCase: RunTargetTestCase;
+  // 提交时的项目 baseUrl 快照，生成和执行都以此为准，避免 worker 反复查库。
+  baseUrl: string;
   generationLogLines?: string[];
 };
 
 type GenerationItem = {
   task: RunTask;
   source: ScriptSource;
-};
-
-type ReadyTaskQueue = {
-  items: RunTask[];
-  generationFinished: boolean;
-  wakeRunner?: () => void;
 };
 
 type StopTarget = {
@@ -74,18 +69,45 @@ type PlaywrightControl = {
   controller: AbortController;
 };
 
-const runBatchQueue: RunTask[][] = [];
-const activeReadyQueues = new Set<ReadyTaskQueue>();
+// 全局共享池：所有提交的用例（不分批次）进这两个队列，常驻 worker 消费。
+// 这样一次提交里慢生成不会阻塞另一次提交的快速用例（排队 bug 的根因）。
+const generationQueue = new AsyncQueue<GenerationItem>();
+const readyQueue = new AsyncQueue<RunTask>();
 const activeGenerationRuns = new Map<number, GenerationControl>();
 const activePlaywrightRuns = new Map<number, PlaywrightControl>();
-let isRunBatchQueueDraining = false;
 
 const GENERATION_LOG_HEADER = "[用例生成日志]";
+
+// Playwright 执行并发度；浏览器进程较重，默认 3，可用 MAX_PLAYWRIGHT_CONCURRENCY 按机器内存调整。
+const PLAYWRIGHT_CONCURRENCY = resolvePlaywrightConcurrency();
+
+function resolvePlaywrightConcurrency() {
+  const raw = Number(process.env.MAX_PLAYWRIGHT_CONCURRENCY);
+  return Number.isInteger(raw) && raw > 0 ? raw : 3;
+}
+
+// Agent 生成并发度；每个 worker 一次处理一条用例（一次 SDK 调用），可用 MAX_GENERATION_CONCURRENCY 调整。
+const GENERATION_CONCURRENCY = resolveGenerationConcurrency();
+
+function resolveGenerationConcurrency() {
+  const raw = Number(process.env.MAX_GENERATION_CONCURRENCY);
+  return Number.isInteger(raw) && raw > 0 ? raw : 3;
+}
+
+// 启动常驻 worker（生成 + 执行），在服务启动、中断恢复之后调用一次。
+export function startRunWorkers() {
+  for (let workerIndex = 0; workerIndex < GENERATION_CONCURRENCY; workerIndex += 1) {
+    void drainGenerationLoop(workerIndex);
+  }
+  for (let workerIndex = 0; workerIndex < PLAYWRIGHT_CONCURRENCY; workerIndex += 1) {
+    void drainReadyLoop();
+  }
+  logRun("运行 worker 已启动", { generationConcurrency: GENERATION_CONCURRENCY, playwrightConcurrency: PLAYWRIGHT_CONCURRENCY });
+}
 
 // 单条运行复用批量提交结果，返回统一的 runIds/skippedCases 结构。
 export async function runTestCase(testCaseId: string) {
   logRun("收到单用例运行请求", { testCaseId });
-  // 单条运行复用批量编排，避免单条和批量生成逻辑分叉。
   return runTestCases([testCaseId]);
 }
 
@@ -110,15 +132,16 @@ export async function runAllTestCases() {
 
 async function submitRunTargets(testCases: RunTargetTestCase[]) {
   const { runnableTestCases, skippedCases } = splitRunTargetsByStatus(testCases);
-  const queuedResult = runnableTestCases.length
-    ? await createQueuedRunTasks(runnableTestCases)
-    : { tasks: [], skippedCases: [] };
-  const allSkippedCases = [...skippedCases, ...queuedResult.skippedCases];
-
-  if (queuedResult.tasks.length) {
-    enqueueRunBatch(queuedResult.tasks);
+  if (!runnableTestCases.length) {
+    logRun("运行提交完成（无可运行用例）", { requestedCount: testCases.length, skippedCount: skippedCases.length });
+    return { runIds: [], skippedCases };
   }
 
+  const project = await getProject();
+  const queuedResult = await createQueuedRunTasks(runnableTestCases, project.baseUrl);
+  dispatchTasks(queuedResult.tasks, project);
+
+  const allSkippedCases = [...skippedCases, ...queuedResult.skippedCases];
   logRun("运行提交完成", {
     requestedCount: testCases.length,
     queuedCount: queuedResult.tasks.length,
@@ -131,7 +154,42 @@ async function submitRunTargets(testCases: RunTargetTestCase[]) {
   };
 }
 
-// 停止当前活跃运行：排队态移出内存队列，生成态终止 Claude 小批次，运行态终止 Playwright。
+// 把提交的 task 分流到全局队列：有可复用脚本直接执行，否则进生成队列。变量解析失败直接判失败。
+function dispatchTasks(tasks: RunTask[], project: ProjectConfig) {
+  for (const task of tasks) {
+    const { testCase } = task;
+
+    if (
+      !shouldGenerateScript({
+        scriptNeedsGeneration: testCase.scriptNeedsGeneration,
+        playwrightScript: testCase.playwrightScript,
+      })
+    ) {
+      appendGenerationLog(task, "本次复用已有 Playwright 脚本，未进入 agent 生成");
+      logRun("复用已有脚本，直接执行", { runLogId: task.runLogId, testCaseId: testCase.id });
+      readyQueue.enqueue(task);
+      continue;
+    }
+
+    try {
+      appendGenerationLog(task, "开始解析自然语言用例变量");
+      // 变量替换只影响传给 agent 的内容，不回写自然语言用例原文。
+      const resolvedNaturalLanguage = resolveVariables(testCase.naturalLanguage, project.variables);
+      appendGenerationLog(task, "变量解析完成，等待进入 agent 生成");
+      generationQueue.enqueue({
+        task,
+        source: { id: testCase.id, title: testCase.title, naturalLanguage: resolvedNaturalLanguage },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "变量解析失败";
+      appendGenerationLog(task, `变量解析失败：${message}`);
+      logRun("变量解析失败", { runLogId: task.runLogId, testCaseId: testCase.id, message });
+      void markFinished(task.runLogId, testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message });
+    }
+  }
+}
+
+// 停止当前活跃运行：排队态移出内存队列，生成态终止该用例的 Claude 生成，运行态终止 Playwright。
 export async function stopTestCaseRun(testCaseId: string): Promise<StopRunResult> {
   logRun("收到停止用例请求", { testCaseId });
   const testCase = await prisma.testCase.findUnique({
@@ -166,7 +224,7 @@ export async function stopTestCaseRun(testCaseId: string): Promise<StopRunResult
     generationControl.controller.abort(new Error(USER_STOP_FAILURE_REASON));
     const targets = generationControl.tasks.map(toStopTarget);
     await markRunsStopped(targets);
-    logRun("已停止 Claude 生成小批次", {
+    logRun("已停止 Claude 生成", {
       testCaseId,
       affectedTestCaseIds: targets.map((target) => target.testCaseId),
     });
@@ -188,7 +246,7 @@ export async function stopTestCaseRun(testCaseId: string): Promise<StopRunResult
   return toStopRunResult(targets);
 }
 
-async function createQueuedRunTasks(testCases: RunTargetTestCase[]) {
+async function createQueuedRunTasks(testCases: RunTargetTestCase[], baseUrl: string) {
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const tasks: RunTask[] = [];
@@ -227,7 +285,7 @@ async function createQueuedRunTasks(testCases: RunTargetTestCase[]) {
         continue;
       }
 
-      // 用户点击运行后立即落库，前端可以马上看到“排队中”的运行记录。
+      // 用户点击运行后立即落库，前端可以马上看到"排队中"的运行记录。
       const runLog = await tx.runLog.create({
         data: {
           testCaseId: testCase.id,
@@ -236,7 +294,7 @@ async function createQueuedRunTasks(testCases: RunTargetTestCase[]) {
         },
       });
 
-      tasks.push({ runLogId: runLog.id, testCase });
+      tasks.push({ runLogId: runLog.id, testCase, baseUrl });
       logRun("创建运行日志并设置排队中", {
         runLogId: runLog.id,
         testCaseId: testCase.id,
@@ -249,125 +307,66 @@ async function createQueuedRunTasks(testCases: RunTargetTestCase[]) {
   });
 }
 
-function enqueueRunBatch(tasks: RunTask[]) {
-  runBatchQueue.push(tasks);
-  logRun("运行批次进入全局队列", {
-    batchSize: tasks.length,
-    queueLength: runBatchQueue.length,
-  });
-  void drainRunBatchQueue();
+// 生成 worker：每个 worker 绑定独立 playwright-cli session（gen-{i}），并发互不踩浏览器。
+async function drainGenerationLoop(workerIndex: number) {
+  const sessionId = `gen-${workerIndex}`;
+  while (true) {
+    const next = await generationQueue.next();
+    if (next.done) {
+      return;
+    }
+    await generateSingleScript(next.value, sessionId);
+  }
 }
 
-async function drainRunBatchQueue() {
-  if (isRunBatchQueueDraining) {
+// 执行 worker：并发消费就绪队列，并发度由 MAX_PLAYWRIGHT_CONCURRENCY 控制（默认 3）。
+async function drainReadyLoop() {
+  while (true) {
+    const next = await readyQueue.next();
+    if (next.done) {
+      return;
+    }
+    await executeTaskWithIsolation(next.value);
+  }
+}
+
+// 生成单个用例的脚本：独立一次 SDK 调用、独立 abort 控制，失败只影响这一条。
+async function generateSingleScript(item: GenerationItem, sessionId: string) {
+  const { task, source } = item;
+  const transitioned = await updateStatus(task.runLogId, task.testCase.id, "generating");
+  if (!transitioned) {
     return;
   }
 
-  isRunBatchQueueDraining = true;
-  try {
-    while (runBatchQueue.length) {
-      const tasks = runBatchQueue.shift()!;
-      await processRuns(tasks);
-    }
-  } finally {
-    isRunBatchQueueDraining = false;
-  }
-}
+  const control = registerGenerationControl([task]);
+  appendGenerationLog(task, "进入 agent 生成");
+  logRun("开始调用 agent 生成用例", { runLogId: task.runLogId, testCaseId: source.id, sessionId });
 
-// 后台处理一批用例：批内生成和执行并行推进，批次之间由全局队列串行。
-async function processRuns(tasks: RunTask[]) {
   try {
-    logRun("开始后台运行批次", {
-      runLogIds: tasks.map((task) => task.runLogId),
-      testCaseIds: tasks.map((task) => task.testCase.id),
-    });
-    const project = await getProject();
-
-    await processRunPipeline(tasks, project);
-    logRun("后台运行批次结束", {
-      runLogIds: tasks.map((task) => task.runLogId),
+    await generateScript(source, task.baseUrl, {
+      signal: control.controller.signal,
+      stopReason: USER_STOP_FAILURE_REASON,
+      onProgress: (message) => appendGenerationLog(task, message),
+      sessionId,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "运行失败";
-    logRun("后台运行批次失败", { message });
-    await Promise.all(
-      tasks.map((task) => {
-        appendGenerationLog(task, `运行批次失败：${message}`);
-        return markFinished(task.runLogId, task.testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message });
-      }),
-    );
+    const message = error instanceof Error ? error.message : "Claude 生成用例失败";
+    appendGenerationLog(task, `agent 生成失败：${message}`);
+    logRun("agent 生成用例失败", { runLogId: task.runLogId, testCaseId: source.id, message });
+    await markFinished(task.runLogId, task.testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message });
+    return;
   } finally {
-    await cleanupRunWorkspace();
+    unregisterGenerationControl(control);
+  }
+
+  if (await saveGeneratedScript(task)) {
+    readyQueue.enqueue(task);
   }
 }
 
-// 批次内双流水线：已有脚本先执行，agent 生成完成的用例再追加执行。
-async function processRunPipeline(tasks: RunTask[], project: ProjectConfig) {
-  const readyQueue = createReadyTaskQueue();
-  activeReadyQueues.add(readyQueue);
-
+async function executeTaskWithIsolation(task: RunTask) {
   try {
-    const generationItems = await collectGenerationItems(tasks, project, readyQueue);
-    await Promise.all([executeReadyTaskQueue(readyQueue, project.baseUrl), generateNeededScripts(generationItems, project, readyQueue)]);
-  } finally {
-    activeReadyQueues.delete(readyQueue);
-  }
-}
-
-// 运行批次结束后清理 playwright-cli 页面探测产物，避免历史快照影响下一次生成。
-async function cleanupRunWorkspace() {
-  try {
-    await cleanupPlaywrightCliWorkspace();
-    logRun("清理 playwright-cli 工作目录完成");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "清理 playwright-cli 工作目录失败";
-    logRun("清理 playwright-cli 工作目录失败", { message });
-  }
-}
-
-function createReadyTaskQueue(): ReadyTaskQueue {
-  return {
-    items: [],
-    generationFinished: false,
-  };
-}
-
-function enqueueReadyTask(queue: ReadyTaskQueue, task: RunTask) {
-  queue.items.push(task);
-  wakeReadyTaskRunner(queue);
-}
-
-function wakeReadyTaskRunner(queue: ReadyTaskQueue) {
-  queue.wakeRunner?.();
-  queue.wakeRunner = undefined;
-}
-
-function waitForReadyTask(queue: ReadyTaskQueue) {
-  return new Promise<void>((resolve) => {
-    queue.wakeRunner = resolve;
-  });
-}
-
-async function executeReadyTaskQueue(queue: ReadyTaskQueue, baseUrl: string) {
-  while (true) {
-    const task = queue.items.shift();
-
-    if (task) {
-      await executeTaskWithIsolation(task, baseUrl);
-      continue;
-    }
-
-    if (queue.generationFinished) {
-      return;
-    }
-
-    await waitForReadyTask(queue);
-  }
-}
-
-async function executeTaskWithIsolation(task: RunTask, baseUrl: string) {
-  try {
-    await executeTask(task, baseUrl);
+    await executeTask(task);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Playwright 执行异常";
     appendGenerationLog(task, `用例执行异常：${message}`);
@@ -380,134 +379,8 @@ async function executeTaskWithIsolation(task: RunTask, baseUrl: string) {
   }
 }
 
-// 筛选需要生成的用例；可复用脚本的用例直接进入执行队列。
-async function collectGenerationItems(tasks: RunTask[], project: ProjectConfig, readyQueue: ReadyTaskQueue) {
-  const generationItems: GenerationItem[] = [];
-
-  for (const task of tasks) {
-    const { testCase } = task;
-
-    if (
-      !shouldGenerateScript({
-        scriptNeedsGeneration: testCase.scriptNeedsGeneration,
-        playwrightScript: testCase.playwrightScript,
-      })
-    ) {
-      appendGenerationLog(task, "本次复用已有 Playwright 脚本，未进入 agent 生成");
-      logRun("复用已有脚本，跳过 agent 生成", {
-        runLogId: task.runLogId,
-        testCaseId: testCase.id,
-        status: testCase.status,
-        scriptNeedsGeneration: testCase.scriptNeedsGeneration,
-      });
-      enqueueReadyTask(readyQueue, task);
-      continue;
-    }
-
-    try {
-      appendGenerationLog(task, "开始解析自然语言用例变量");
-      // 变量替换只影响传给 agent 的内容，不回写自然语言用例原文。
-      const resolvedNaturalLanguage = resolveVariables(testCase.naturalLanguage, project.variables);
-      appendGenerationLog(task, "变量解析完成，等待进入 agent 生成");
-      generationItems.push({
-        task,
-        source: {
-          id: testCase.id,
-          title: testCase.title,
-          naturalLanguage: resolvedNaturalLanguage,
-        },
-      });
-      logRun("用例需要 agent 生成", {
-        runLogId: task.runLogId,
-        testCaseId: testCase.id,
-        title: testCase.title,
-        scriptNeedsGeneration: testCase.scriptNeedsGeneration,
-        hasScript: Boolean(testCase.playwrightScript),
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "变量解析失败";
-      appendGenerationLog(task, `变量解析失败：${message}`);
-      logRun("变量解析失败", {
-        runLogId: task.runLogId,
-        testCaseId: testCase.id,
-        message,
-      });
-      await markFinished(task.runLogId, testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message });
-    }
-  }
-
-  return generationItems;
-}
-
-// 按最多 10 条一组调用 Claude；每个小批完成后把成功生成的用例追加到执行队列。
-async function generateNeededScripts(generationItems: GenerationItem[], project: ProjectConfig, readyQueue: ReadyTaskQueue) {
-  try {
-    for (const chunk of chunkByAgentGenerationBatchSize(generationItems)) {
-      await generateScriptChunk(chunk, project, readyQueue);
-    }
-  } finally {
-    readyQueue.generationFinished = true;
-    wakeReadyTaskRunner(readyQueue);
-  }
-}
-
-async function generateScriptChunk(generationItems: GenerationItem[], project: ProjectConfig, readyQueue: ReadyTaskQueue) {
-  const transitionResults = await Promise.all(
-    generationItems.map((item) => updateStatus(item.task.runLogId, item.task.testCase.id, "generating")),
-  );
-  const activeItems = generationItems.filter((_item, index) => transitionResults[index]);
-
-  if (!activeItems.length) {
-    return;
-  }
-
-  const generationTasks = activeItems.map((item) => item.task);
-  const generationControl = registerGenerationControl(generationTasks);
-  appendGenerationLogToItems(activeItems, `进入 agent 生成，批次包含 ${activeItems.length} 条用例`);
-  logRun("开始调用 agent 生成脚本小批次", {
-    caseCount: activeItems.length,
-    testCaseIds: activeItems.map((item) => item.source.id),
-  });
-
-  try {
-    await generateScripts(
-      activeItems.map((item) => item.source),
-      project.baseUrl,
-      {
-        signal: generationControl.controller.signal,
-        stopReason: USER_STOP_FAILURE_REASON,
-        onProgress: (message) => appendGenerationLogToItems(activeItems, message),
-      },
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Claude Code 生成用例失败";
-    appendGenerationLogToItems(activeItems, `agent 生成失败：${message}`);
-    logRun("调用 agent 生成脚本小批次失败", {
-      testCaseIds: activeItems.map((item) => item.source.id),
-      message,
-    });
-    await Promise.all(
-      generationTasks.map((task) => markFinished(task.runLogId, task.testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message })),
-    );
-    return;
-  } finally {
-    unregisterGenerationControl(generationControl);
-  }
-
-  for (const item of activeItems) {
-    const saved = await saveGeneratedScript(item.task);
-    if (saved) {
-      enqueueReadyTask(readyQueue, item.task);
-    }
-  }
-
-  logRun("agent 生成脚本小批次保存完成", {
-    testCaseIds: activeItems.map((item) => item.source.id),
-  });
-}
-
 // 执行单个用例的 Playwright 脚本并落最终状态。
-async function executeTask(task: RunTask, baseUrl: string) {
+async function executeTask(task: RunTask) {
   logRun("准备执行用例", {
     runLogId: task.runLogId,
     testCaseId: task.testCase.id,
@@ -549,7 +422,7 @@ async function executeTask(task: RunTask, baseUrl: string) {
   const playwrightControl = registerPlaywrightControl(task);
   let result;
   try {
-    result = await runPlaywright(script, baseUrl, latestTestCase.id, {
+    result = await runPlaywright(script, task.baseUrl, latestTestCase.id, {
       signal: playwrightControl.controller.signal,
       stopReason: USER_STOP_FAILURE_REASON,
     });
@@ -851,44 +724,11 @@ function unregisterPlaywrightControl(runLogId: number, control: PlaywrightContro
   }
 }
 
+// 从两个全局队列摘出排队中（尚未交付给 worker）的 task，停止时调用。
 function removeQueuedTasks(runLogId: number) {
-  const removedTasks: RunTask[] = [];
-
-  for (let batchIndex = runBatchQueue.length - 1; batchIndex >= 0; batchIndex -= 1) {
-    const batch = runBatchQueue[batchIndex];
-    const remaining = batch.filter((task) => {
-      if (task.runLogId !== runLogId) {
-        return true;
-      }
-
-      removedTasks.push(task);
-      return false;
-    });
-
-    if (remaining.length) {
-      runBatchQueue[batchIndex] = remaining;
-    } else {
-      runBatchQueue.splice(batchIndex, 1);
-    }
-  }
-
-  for (const queue of activeReadyQueues) {
-    const originalLength = queue.items.length;
-    queue.items = queue.items.filter((task) => {
-      if (task.runLogId !== runLogId) {
-        return true;
-      }
-
-      removedTasks.push(task);
-      return false;
-    });
-
-    if (queue.items.length !== originalLength) {
-      wakeReadyTaskRunner(queue);
-    }
-  }
-
-  return removedTasks;
+  const fromGeneration = generationQueue.remove((item) => item.task.runLogId === runLogId).map((item) => item.task);
+  const fromReady = readyQueue.remove((task) => task.runLogId === runLogId);
+  return [...fromGeneration, ...fromReady];
 }
 
 async function markRunsStopped(targets: StopTarget[]) {
@@ -923,12 +763,6 @@ function toStopRunResult(targets: StopTarget[]): StopRunResult {
     stopped: true,
     affectedTestCaseIds: Array.from(new Set(targets.map((target) => target.testCaseId))),
   };
-}
-
-function appendGenerationLogToItems(items: GenerationItem[], message: string) {
-  for (const item of items) {
-    appendGenerationLog(item.task, message);
-  }
 }
 
 function appendGenerationLog(task: RunTask, message: string) {

@@ -8,8 +8,10 @@ import { runLogsRouter } from "./routes/runLogs.js";
 import { testCaseGroupsRouter } from "./routes/testCaseGroups.js";
 import { testCasesRouter } from "./routes/testCases.js";
 import { getFrontendStaticDir, getServerPort } from "./serverConfig.js";
+import { cleanupPlaywrightCliWorkspace } from "./services/cleanupService.js";
 import { initializeDatabase } from "./services/databaseInitService.js";
 import { recoverInterruptedRunsOnStartup } from "./services/interruptedRunRecoveryService.js";
+import { startRunWorkers } from "./services/testCaseRunService.js";
 
 const app = express();
 
@@ -46,6 +48,9 @@ if (existsSync(frontendIndexFile)) {
 async function startServer() {
   await initializeDatabase();
   await recoverInterruptedRunsOnStartup();
+  // 启动常驻运行 worker（生成 + 执行）；worker 启动前清掉上一次遗留的 playwright-cli 探测产物。
+  await cleanupPlaywrightCliWorkspace();
+  startRunWorkers();
 
   app.listen(port, () => {
     console.log(`API server listening on http://localhost:${port}`);

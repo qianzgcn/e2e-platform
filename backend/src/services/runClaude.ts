@@ -13,11 +13,10 @@ type RunClaudeOptions = {
   onProgress?: (message: string) => void;
 };
 
-// 通过 Claude Agent SDK 执行一次生成任务，返回最终结果文本。
-// 超时、中止或执行失败时抛出 Error；`killed: true` 表示是被外部主动终止。
+// 通过 Claude Agent SDK 执行一次生成任务，返回最终结果文本；失败时抛出带可读原因的 Error。
 export async function runClaude(prompt: string, options: RunClaudeOptions = {}): Promise<string> {
   if (options.signal?.aborted) {
-    throw toClaudeError(options.stopReason ?? "Claude 生成已被终止", true);
+    throw toClaudeError(options.stopReason ?? "Claude 生成已被终止");
   }
 
   const controller = new AbortController();
@@ -73,12 +72,12 @@ async function drainClaudeStream(
     }
   } catch (error) {
     throw controller.signal.aborted
-      ? toClaudeError(abortMessage(controller, options), true, recentEvents)
-      : toClaudeError(errorMessage(error), false, recentEvents);
+      ? toClaudeError(abortMessage(controller, options), recentEvents)
+      : toClaudeError(errorMessage(error), recentEvents);
   }
 
   if (failed || !gotResult) {
-    throw toClaudeError(resultText || "Claude 生成用例失败", false, recentEvents);
+    throw toClaudeError(resultText || "Claude 生成用例失败", recentEvents);
   }
   return resultText;
 }
@@ -95,7 +94,7 @@ function abortMessage(controller: AbortController, options: RunClaudeOptions): s
 }
 
 // 将 SDK 消息压缩成单行摘要，用于实时进度上报。
-export function summarizeClaudeEvent(event: unknown): string | null {
+function summarizeClaudeEvent(event: unknown): string | null {
   if (!isRecord(event)) return null;
 
   switch (event.type) {
@@ -193,9 +192,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function toClaudeError(message: string, killed: boolean, recentEvents: string[] = []): Error & { killed: boolean } {
+function toClaudeError(message: string, recentEvents: string[] = []): Error {
   if (recentEvents.length) console.log("[runClaude] 最近事件", recentEvents);
-  const error = new Error(message) as Error & { killed: boolean };
-  error.killed = killed;
-  return error;
+  return new Error(message);
 }

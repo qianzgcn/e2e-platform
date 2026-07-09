@@ -6,56 +6,41 @@ export type ScriptSource = {
   naturalLanguage: string;
 };
 
-type GenerateScriptsOptions = {
+type GenerateScriptOptions = {
   signal?: AbortSignal;
   stopReason?: string;
   onProgress?: (message: string) => void;
+  // playwright-cli 的浏览器 session 名；并发生成时每个 worker 用不同 session，互不踩浏览器。
+  sessionId?: string;
 };
 
-// 生成单个用例脚本，内部复用批量生成逻辑。
-export async function generateScript(testCase: ScriptSource, baseUrl: string, options: GenerateScriptsOptions = {}) {
-  await generateScripts([testCase], baseUrl, options);
-}
-
-// 调用 Claude Code 批量生成 Playwright spec 文件。
-export async function generateScripts(testCases: ScriptSource[], baseUrl: string, options: GenerateScriptsOptions = {}) {
-  if (!testCases.length) {
-    return;
-  }
-
-  const prompt = buildPrompt(testCases, baseUrl);
-  logAgent("准备调用 Claude Code", {
-    caseCount: testCases.length,
-    caseIds: testCases.map((testCase) => testCase.id),
-    baseUrl,
-    promptLength: prompt.length,
-  });
+// 调用 Claude 为单个用例生成 Playwright spec；Claude 用 Write 工具把文件落到 tests/generated。
+export async function generateScript(testCase: ScriptSource, baseUrl: string, options: GenerateScriptOptions = {}) {
+  const prompt = buildPrompt(testCase, baseUrl);
+  logAgent("准备调用 Claude 生成", { caseId: testCase.id, baseUrl, promptLength: prompt.length });
 
   try {
-    // Claude 的职责是写入 spec 文件；后续由运行服务读取文件并保存到数据库。
     await runClaude(prompt, {
       cwd: process.cwd(),
       signal: options.signal,
       stopReason: options.stopReason,
       onProgress: options.onProgress,
+      env: options.sessionId ? { PLAYWRIGHT_CLI_SESSION: options.sessionId } : undefined,
     });
-    logAgent("Claude Code 生成完成", {
-      caseIds: testCases.map((testCase) => testCase.id),
-    });
+    logAgent("Claude 生成完成", { caseId: testCase.id });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Claude 生成用例失败";
-    logAgent("Claude 生成失败", { message });
+    logAgent("Claude 生成失败", { caseId: testCase.id, message });
     throw new Error(message);
   }
 }
 
-// 构造传给 Claude Code 的完整提示词。
-export function buildPrompt(testCases: ScriptSource[], baseUrl: string) {
-  // prompt 里的 payload 用 JSON 承载，避免自然语言分隔符导致 Claude 误读用例边界。
+// 构造传给 Claude 的提示词；payload 用 JSON 承载，避免自然语言分隔符导致误读用例边界。
+export function buildPrompt(testCase: ScriptSource, baseUrl: string) {
   const payload = {
     baseUrl,
     outputDir: "tests/generated",
-    testCases,
+    testCases: [testCase],
   };
 
   return `
@@ -75,7 +60,6 @@ ${JSON.stringify(payload, null, 2)}
 `.trim();
 }
 
-// 输出 agent 服务日志。
 function logAgent(message: string, data?: unknown) {
   console.log(`[agentService] ${message}`, data ?? "");
 }

@@ -65,7 +65,7 @@ export async function runPlaywright(
     });
     return { success: true, stdout, stderr };
   } catch (error) {
-    const result = error as { stdout?: string; stderr?: string; message?: string; killed?: boolean; signal?: string };
+    const result = error as { stdout?: string; stderr?: string; message?: string; killed?: boolean };
     const stderr = result.stderr ?? "";
     const stdout = result.stdout ?? "";
     const stopped = options.signal?.aborted || result.killed;
@@ -122,7 +122,7 @@ function runPlaywrightCommand(
       options.signal?.removeEventListener("abort", onAbort);
     };
 
-    const rejectOnce = (error: Error & { stdout?: string; stderr?: string; killed?: boolean; signal?: string }) => {
+    const rejectOnce = (error: Error & { stdout?: string; stderr?: string; killed?: boolean }) => {
       if (settled) {
         return;
       }
@@ -134,7 +134,7 @@ function runPlaywrightCommand(
 
     const onAbort = () => {
       killProcess(child);
-      rejectOnce(toPlaywrightError(options.stopReason ?? "Playwright 已被终止", stdout, stderr, true, "SIGTERM"));
+      rejectOnce(toPlaywrightError(options.stopReason ?? "Playwright 已被终止", stdout, stderr, true));
     };
 
     options.signal?.addEventListener("abort", onAbort, { once: true });
@@ -151,7 +151,7 @@ function runPlaywrightCommand(
       stdout += chunk;
       if (stdout.length + stderr.length > MAX_PLAYWRIGHT_OUTPUT_BUFFER) {
         killProcess(child);
-        rejectOnce(toPlaywrightError("Playwright 输出超过限制，已终止执行", stdout, stderr, true, "SIGTERM"));
+        rejectOnce(toPlaywrightError("Playwright 输出超过限制，已终止执行", stdout, stderr, true));
       }
     });
 
@@ -159,7 +159,7 @@ function runPlaywrightCommand(
       stderr += chunk;
       if (stdout.length + stderr.length > MAX_PLAYWRIGHT_OUTPUT_BUFFER) {
         killProcess(child);
-        rejectOnce(toPlaywrightError("Playwright 输出超过限制，已终止执行", stdout, stderr, true, "SIGTERM"));
+        rejectOnce(toPlaywrightError("Playwright 输出超过限制，已终止执行", stdout, stderr, true));
       }
     });
 
@@ -167,7 +167,7 @@ function runPlaywrightCommand(
       rejectOnce(toPlaywrightError(error.message, stdout, stderr));
     });
 
-    child.on("close", (code, signal) => {
+    child.on("close", (code) => {
       if (settled) {
         return;
       }
@@ -180,17 +180,16 @@ function runPlaywrightCommand(
         return;
       }
 
-      reject(toPlaywrightError(`Playwright 退出码异常: ${code ?? "null"}`, stdout, stderr, false, signal ?? undefined));
+      reject(toPlaywrightError(`Playwright 退出码异常: ${code ?? "null"}`, stdout, stderr, false));
     });
   });
 }
 
-function toPlaywrightError(message: string, stdout: string, stderr: string, killed = false, signal?: string) {
+function toPlaywrightError(message: string, stdout: string, stderr: string, killed = false) {
   return Object.assign(new Error(message), {
     stdout,
     stderr,
     killed,
-    signal,
   });
 }
 
