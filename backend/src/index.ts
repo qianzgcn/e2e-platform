@@ -8,9 +8,9 @@ import { runLogsRouter } from "./routes/runLogs.js";
 import { testCaseGroupsRouter } from "./routes/testCaseGroups.js";
 import { testCasesRouter } from "./routes/testCases.js";
 import { getFrontendStaticDir, getServerPort } from "./serverConfig.js";
-import { cleanupPlaywrightCliWorkspace } from "./services/cleanupService.js";
-import { initializeDatabase } from "./services/databaseInitService.js";
-import { recoverInterruptedRunsOnStartup } from "./services/interruptedRunRecoveryService.js";
+import { cleanupPlaywrightCliWorkspace } from "./utils/cleanupService.js";
+import { initializeDatabase } from "./utils/databaseInitService.js";
+import { recoverInterruptedRunsOnStartup } from "./utils/interruptedRunRecoveryService.js";
 import { startRunWorkers } from "./services/testCaseRunService.js";
 
 const app = express();

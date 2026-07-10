@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { v4 as uuidv4 } from "uuid";
-import { prisma } from "../prisma.js";
-import { getLatestArtifacts } from "../services/artifactService.js";
-import { removePlaywrightTestResults } from "../services/cleanupService.js";
-import { resolveScriptGenerationOnSave } from "../services/testCaseScriptGeneration.js";
+import { prisma } from "../infra/prisma.js";
+import { getLatestArtifacts } from "../utils/artifactService.js";
+import { removePlaywrightTestResults } from "../utils/cleanupService.js";
+import { resolveScriptGenerationOnSave } from "../utils/testCaseScriptGeneration.js";
+import { generateTestCaseCandidates } from "../services/caseGenerationService.js";
 import { runAllTestCases, runTestCase, runTestCases, stopTestCaseRun } from "../services/testCaseRunService.js";
+import { ensureRepo } from "../infra/repoService.js";
 
 export const testCasesRouter = Router();
 
@@ -263,6 +265,32 @@ testCasesRouter.post("/run-all", async (req, res) => {
     res.json(await runAllTestCases(projectId));
   } catch (error) {
     res.status(400).json({ message: error instanceof Error ? error.message : "全量运行失败" });
+  }
+});
+
+// AI 基于项目代码仓库生成用例候选（自然语言步骤），供前端审核后导入。
+testCasesRouter.post("/generate", async (req, res) => {
+  const projectId = Number(req.body.projectId);
+  if (!Number.isInteger(projectId)) {
+    res.status(400).json({ message: "projectId 必填" });
+    return;
+  }
+  const hint = typeof req.body.hint === "string" ? req.body.hint : undefined;
+  try {
+    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { repoUrl: true } });
+    if (!project) {
+      res.status(404).json({ message: "项目不存在" });
+      return;
+    }
+    if (!project.repoUrl) {
+      res.status(400).json({ message: "项目未配置代码仓库（repoUrl）" });
+      return;
+    }
+    const repoPath = await ensureRepo(project.repoUrl, projectId);
+    const candidates = await generateTestCaseCandidates(repoPath, hint);
+    res.json({ candidates });
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "生成用例失败" });
   }
 });
 

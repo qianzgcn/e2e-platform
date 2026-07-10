@@ -1,4 +1,4 @@
-import { runClaude } from "./runClaude.js";
+import { runClaude } from "../infra/runClaude.js";
 
 export type ScriptSource = {
   title: string;

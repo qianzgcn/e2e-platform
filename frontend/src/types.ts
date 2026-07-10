@@ -36,6 +36,12 @@ export type TestCaseExcelRow = {
   naturalLanguage: string;
 };
 
+export type TestCaseCandidate = {
+  title: string;
+  groupName: string;
+  naturalLanguage: string;
+};
+
 export type TestCaseImportResult = {
   createdCount: number;
   skippedCount: number;
@@ -71,6 +77,7 @@ export type ProjectConfig = {
   id: number;
   name: string;
   baseUrl: string;
+  repoUrl?: string | null;
   variables: ProjectVariable[];
 };
 

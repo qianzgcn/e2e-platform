@@ -1,8 +1,9 @@
-import { DashboardOutlined, ProjectOutlined, SettingOutlined } from "@ant-design/icons";
+import { DashboardOutlined, ProjectOutlined, RobotOutlined, SettingOutlined } from "@ant-design/icons";
 import { ConfigProvider, Layout, Menu, Select, Typography } from "antd";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ProjectProvider, useProject } from "./ProjectContext";
 import { DashboardPage } from "./pages/DashboardPage";
+import { GenerateCasesPage } from "./pages/GenerateCasesPage";
 import { ProjectSettingsPage } from "./pages/ProjectSettingsPage";
 import { TestCasePage } from "./pages/TestCasePage";
 
@@ -54,6 +55,7 @@ export default function App() {
               items={[
                 { key: "/dashboard", icon: <DashboardOutlined />, label: "看板" },
                 { key: "/test-cases", icon: <ProjectOutlined />, label: "用例管理" },
+                { key: "/generate-cases", icon: <RobotOutlined />, label: "AI 生成用例" },
                 { key: "/settings", icon: <SettingOutlined />, label: "配置" },
               ]}
             />
@@ -67,6 +69,7 @@ export default function App() {
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/test-cases" element={<TestCasePage />} />
+                <Route path="/generate-cases" element={<GenerateCasesPage />} />
                 <Route path="/settings" element={<ProjectSettingsPage />} />
               </Routes>
             </Layout.Content>

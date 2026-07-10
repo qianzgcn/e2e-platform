@@ -1,7 +1,7 @@
 import { request } from "./client";
 import type { ProjectConfig } from "../types";
 
-export type ProjectPayload = Pick<ProjectConfig, "name" | "baseUrl" | "variables">;
+export type ProjectPayload = Pick<ProjectConfig, "name" | "baseUrl" | "repoUrl" | "variables">;
 
 export function fetchProjects() {
   return request<ProjectConfig[]>("/project");

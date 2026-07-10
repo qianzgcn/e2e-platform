@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import mariadb from "mariadb";
-import { databaseUrlToMariaDbConfig } from "../prisma.js";
+import { databaseUrlToMariaDbConfig } from "../infra/prisma.js";
 
-const repeatableSqlFiles = ["init.sql", "add_column.sql", "change_column.sql", "add_project_id.sql"];
+const repeatableSqlFiles = ["init.sql", "add_column.sql", "change_column.sql", "add_project_id.sql", "add_repo_url.sql"];
 
 function splitSqlStatements(sql: string): string[] {
   return sql

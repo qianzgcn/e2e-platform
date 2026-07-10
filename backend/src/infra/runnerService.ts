@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { resetPlaywrightTestResults } from "./cleanupService.js";
+import { resetPlaywrightTestResults } from "../utils/cleanupService.js";
 
 const MAX_PLAYWRIGHT_OUTPUT_BUFFER = 1024 * 1024 * 10;
 

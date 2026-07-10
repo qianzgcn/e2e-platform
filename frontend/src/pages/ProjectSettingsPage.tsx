@@ -8,10 +8,11 @@ import type { ProjectConfig } from "../types";
 type ProjectForm = {
   name: string;
   baseUrl: string;
+  repoUrl: string;
   variables: Array<{ name: string; value: string; description?: string | null }>;
 };
 
-const EMPTY_FORM: ProjectForm = { name: "", baseUrl: "", variables: [] };
+const EMPTY_FORM: ProjectForm = { name: "", baseUrl: "", repoUrl: "", variables: [] };
 
 export function ProjectSettingsPage() {
   const { projects, reloadProjects } = useProject();
@@ -36,6 +37,7 @@ export function ProjectSettingsPage() {
     form.setFieldsValue({
       name: project.name,
       baseUrl: project.baseUrl,
+      repoUrl: project.repoUrl ?? "",
       variables: project.variables ?? [],
     });
     setDrawerOpen(true);
@@ -133,6 +135,9 @@ export function ProjectSettingsPage() {
           </Form.Item>
           <Form.Item name="baseUrl" label="baseUrl" rules={[{ required: true, message: "请输入 baseUrl" }]}>
             <Input placeholder="http://localhost:5173" />
+          </Form.Item>
+          <Form.Item name="repoUrl" label="代码仓库 URL" tooltip="AI 生成用例时 clone 该仓库读代码">
+            <Input placeholder="https://github.com/owner/repo.git" />
           </Form.Item>
 
           <Form.List name="variables">

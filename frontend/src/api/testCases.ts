@@ -3,6 +3,7 @@ import type {
   LatestRunDetail,
   RunRequestResult,
   StopRunResult,
+  TestCaseCandidate,
   TestCaseDetail,
   TestCaseExcelRow,
   TestCaseImportResult,
@@ -85,5 +86,12 @@ export function importTestCases(projectId: number, rows: Array<TestCaseExcelRow 
   return request<TestCaseImportResult>("/test-cases/import", {
     method: "POST",
     body: JSON.stringify({ projectId, rows }),
+  });
+}
+
+export function generateTestCaseCandidates(projectId: number, hint?: string) {
+  return request<{ candidates: TestCaseCandidate[] }>("/test-cases/generate", {
+    method: "POST",
+    body: JSON.stringify({ projectId, hint }),
   });
 }

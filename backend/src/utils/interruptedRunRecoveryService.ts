@@ -1,4 +1,4 @@
-import { prisma } from "../prisma.js";
+import { prisma } from "../infra/prisma.js";
 import { createInterruptedRunRecoveryArgs } from "./runStatus.js";
 
 // 服务启动时只做一次恢复：把上次中断遗留的活跃态收敛为 failed。

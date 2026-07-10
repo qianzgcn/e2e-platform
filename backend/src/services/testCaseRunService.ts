@@ -1,10 +1,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { generateScript, type ScriptSource } from "./agentService.js";
-import { AsyncQueue } from "./asyncQueue.js";
-import { prisma } from "../prisma.js";
-import { runPlaywright } from "./runnerService.js";
-import { shouldGenerateScript } from "./testCaseScriptGeneration.js";
+import { AsyncQueue } from "../infra/asyncQueue.js";
+import { prisma } from "../infra/prisma.js";
+import { runPlaywright } from "../infra/runnerService.js";
+import { shouldGenerateScript } from "../utils/testCaseScriptGeneration.js";
 import {
   ACTIVE_STATUSES,
   SUBMITTABLE_STATUSES,
@@ -13,7 +13,7 @@ import {
   toSkippedRunCase,
   type SkippedRunCase,
   type TestCaseRunStatus,
-} from "./runStatus.js";
+} from "../utils/runStatus.js";
 
 type SharedRunningStatus = "queued" | "generating" | "running" | "success" | "failed";
 

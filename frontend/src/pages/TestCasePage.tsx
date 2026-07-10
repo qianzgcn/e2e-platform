@@ -12,6 +12,7 @@ import { Alert, Button, Input, Modal, Space, Table, Tag, Tooltip, Typography, me
 import type { ColumnType } from "antd/es/table";
 import type { ChangeEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { createTestCaseGroup, fetchTestCaseGroups } from "../api/testCaseGroups";
 import {
   createTestCase,
@@ -63,6 +64,7 @@ export function TestCasePage() {
   const [editingCase, setEditingCase] = useState<TestCaseDetail | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [runLogItem, setRunLogItem] = useState<TestCaseListItem | null>(null);
+  const navigate = useNavigate();
   const importInputRef = useRef<HTMLInputElement>(null);
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
@@ -429,6 +431,9 @@ export function TestCasePage() {
             </Button>
             <Button icon={<PlayCircleOutlined />} loading={runningAll} onClick={() => void handleRunAll()}>
               全量运行
+            </Button>
+            <Button onClick={() => navigate("/generate-cases")} disabled={currentProjectId == null}>
+              AI 生成
             </Button>
           </Space>
           <Space>
