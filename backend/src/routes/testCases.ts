@@ -95,6 +95,20 @@ testCasesRouter.get("/", async (req, res) => {
   );
 });
 
+// 加载待审核的候选用例（刷新页面不丢）。
+testCasesRouter.get("/candidates", async (req, res) => {
+  const projectId = Number(req.query.projectId);
+  if (!Number.isInteger(projectId)) {
+    res.status(400).json({ message: "projectId 必填" });
+    return;
+  }
+  const candidates = await prisma.testCaseCandidate.findMany({
+    where: { projectId, status: "pending" },
+    orderBy: { id: "asc" },
+  });
+  res.json({ candidates });
+});
+
 testCasesRouter.get("/:id", async (req, res) => {
   const id = req.params.id;
   const testCase = await prisma.testCase.findUnique({
@@ -277,7 +291,10 @@ testCasesRouter.post("/generate", async (req, res) => {
   }
   const hint = typeof req.body.hint === "string" ? req.body.hint : undefined;
   try {
-    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { repoUrl: true } });
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { repoUrl: true, promptHint: true, variables: { select: { name: true } } },
+    });
     if (!project) {
       res.status(404).json({ message: "项目不存在" });
       return;
@@ -286,12 +303,71 @@ testCasesRouter.post("/generate", async (req, res) => {
       res.status(400).json({ message: "项目未配置代码仓库（repoUrl）" });
       return;
     }
+    console.log(`[testCases] 生成用例请求 projectId=${projectId} hint=${hint ? "有" : "无"}`);
     const repoPath = await ensureRepo(project.repoUrl, projectId);
-    const candidates = await generateTestCaseCandidates(repoPath, hint);
-    res.json({ candidates });
+    const { candidates, logs } = await generateTestCaseCandidates(repoPath, project, hint);
+    console.log(`[testCases] 生成完成 ${candidates.length} 条候选`);
+
+    const generation = await prisma.testCaseGeneration.create({
+      data: {
+        projectId,
+        logs: logs.join("\n"),
+        hint: hint ?? null,
+        candidates: {
+          create: candidates.map((candidate) => ({
+            projectId,
+            title: candidate.title,
+            groupName: candidate.groupName,
+            naturalLanguage: candidate.naturalLanguage,
+          })),
+        },
+      },
+      include: { candidates: { orderBy: { id: "asc" } } },
+    });
+    res.json({ generationId: generation.id, candidates: generation.candidates });
   } catch (error) {
+    console.error("[testCases] 生成用例失败", error instanceof Error ? error.message : error);
     res.status(400).json({ message: error instanceof Error ? error.message : "生成用例失败" });
   }
+});
+
+// 导入选中候选为 TestCase 并标记 imported。候选字段以请求传入为准（允许用户在审核时编辑）。
+testCasesRouter.post("/candidates/import", async (req, res) => {
+  const input = Array.isArray(req.body.candidates)
+    ? (req.body.candidates as Array<{ id: number; title: string; groupName: string; naturalLanguage: string }>)
+    : [];
+  const valid = input.filter((row) => Number.isInteger(row.id) && row.title && row.groupName && row.naturalLanguage);
+  if (!valid.length) {
+    res.status(400).json({ message: "candidates 必填" });
+    return;
+  }
+  try {
+    const ids = valid.map((row) => row.id);
+    const existing = await prisma.testCaseCandidate.findMany({ where: { id: { in: ids }, status: "pending" } });
+    if (!existing.length) {
+      res.json({ createdCount: 0, skippedCount: 0 });
+      return;
+    }
+    const existingIds = new Set(existing.map((candidate) => candidate.id));
+    const projectId = existing[0].projectId;
+    const rows = valid.filter((row) => existingIds.has(row.id));
+    const { createdIds, skippedRows } = await createTestCasesFromRows(projectId, rows);
+    await prisma.testCaseCandidate.updateMany({ where: { id: { in: ids } }, data: { status: "imported" } });
+    res.json({ createdCount: createdIds.length, skippedCount: skippedRows.length });
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "导入失败" });
+  }
+});
+
+// 查看某次生成的日志。
+testCasesRouter.get("/generations/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  const generation = await prisma.testCaseGeneration.findUnique({ where: { id } });
+  if (!generation) {
+    res.status(404).json({ message: "生成记录不存在" });
+    return;
+  }
+  res.json(generation);
 });
 
 testCasesRouter.post("/export-rows", async (req, res) => {
@@ -325,19 +401,27 @@ testCasesRouter.post("/import", async (req, res) => {
     return;
   }
   const rows = Array.isArray(req.body.rows) ? (req.body.rows as ImportTestCaseRow[]) : [];
-  const { validRows, skippedRows } = normalizeImportRows(rows);
+  const result = await createTestCasesFromRows(projectId, rows);
+  res.json({
+    createdCount: result.createdIds.length,
+    skippedCount: result.skippedRows.length,
+    createdIds: result.createdIds,
+    skippedRows: result.skippedRows,
+  });
+});
 
+// 把用例行（title/groupName/naturalLanguage）入库为 TestCase：normalize、去重、建分组、批量创建。
+// POST /import 与 POST /candidates/import 共用。
+async function createTestCasesFromRows(
+  projectId: number,
+  rows: ImportTestCaseRow[],
+): Promise<{ createdIds: string[]; skippedRows: SkippedImportTestCaseRow[] }> {
+  const { validRows, skippedRows } = normalizeImportRows(rows);
   if (!validRows.length) {
-    res.json({
-      createdCount: 0,
-      skippedCount: skippedRows.length,
-      createdIds: [],
-      skippedRows,
-    });
-    return;
+    return { createdIds: [], skippedRows };
   }
 
-  const result = await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const existingTestCases = await tx.testCase.findMany({
       where: { projectId, title: { in: validRows.map((row) => row.title) } },
       select: { title: true },
@@ -358,10 +442,7 @@ testCasesRouter.post("/import", async (req, res) => {
     }
 
     if (!rowsToCreate.length) {
-      return {
-        createdIds: [],
-        skippedRows: [...skippedRows, ...duplicateSkippedRows],
-      };
+      return { createdIds: [], skippedRows: [...skippedRows, ...duplicateSkippedRows] };
     }
 
     const groupNames = Array.from(new Set(rowsToCreate.map((row) => row.groupName)));
@@ -395,19 +476,9 @@ testCasesRouter.post("/import", async (req, res) => {
       })),
     });
 
-    return {
-      createdIds,
-      skippedRows: [...skippedRows, ...duplicateSkippedRows],
-    };
+    return { createdIds, skippedRows: [...skippedRows, ...duplicateSkippedRows] };
   });
-
-  res.json({
-    createdCount: result.createdIds.length,
-    skippedCount: result.skippedRows.length,
-    createdIds: result.createdIds,
-    skippedRows: result.skippedRows,
-  });
-});
+}
 
 testCasesRouter.post("/:id/run", async (req, res) => {
   const ids = parseIds(req.params.id);

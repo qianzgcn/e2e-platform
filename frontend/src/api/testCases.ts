@@ -6,6 +6,7 @@ import type {
   TestCaseCandidate,
   TestCaseDetail,
   TestCaseExcelRow,
+  TestCaseGeneration,
   TestCaseImportResult,
   TestCaseListItem,
   TestCasePayload,
@@ -90,8 +91,23 @@ export function importTestCases(projectId: number, rows: Array<TestCaseExcelRow 
 }
 
 export function generateTestCaseCandidates(projectId: number, hint?: string) {
-  return request<{ candidates: TestCaseCandidate[] }>("/test-cases/generate", {
+  return request<{ generationId: number; candidates: TestCaseCandidate[] }>("/test-cases/generate", {
     method: "POST",
     body: JSON.stringify({ projectId, hint }),
   });
+}
+
+export function fetchCandidates(projectId: number) {
+  return request<{ candidates: TestCaseCandidate[] }>(`/test-cases/candidates?projectId=${projectId}`);
+}
+
+export function importCandidates(candidates: TestCaseCandidate[]) {
+  return request<{ createdCount: number; skippedCount: number }>("/test-cases/candidates/import", {
+    method: "POST",
+    body: JSON.stringify({ candidates }),
+  });
+}
+
+export function fetchGenerationLogs(id: number) {
+  return request<TestCaseGeneration>(`/test-cases/generations/${id}`);
 }

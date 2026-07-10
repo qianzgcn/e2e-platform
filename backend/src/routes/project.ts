@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../infra/prisma.js";
+import { testRepoConnectivity } from "../infra/repoService.js";
 
 export const projectRouter = Router();
 
@@ -36,7 +37,7 @@ projectRouter.get("/", async (_req, res) => {
 
 // 新建项目（项目名唯一）。
 projectRouter.post("/", async (req, res) => {
-  const { name, baseUrl } = req.body;
+  const { name, baseUrl, repoUrl, promptHint } = req.body;
   const variables = normalizeVariables(req.body.variables);
 
   if (!name || !baseUrl) {
@@ -46,12 +47,27 @@ projectRouter.post("/", async (req, res) => {
 
   try {
     const project = await prisma.project.create({
-      data: { name, baseUrl, variables: { create: variables } },
+      data: { name, baseUrl, repoUrl, promptHint: promptHint || null, variables: { create: variables } },
       include: projectInclude,
     });
     res.status(201).json(project);
   } catch {
     res.status(400).json({ message: "项目名已存在" });
+  }
+});
+
+// 测试代码仓库 URL 是否可访问（git ls-remote，不 clone）。
+projectRouter.post("/test-repo", async (req, res) => {
+  const repoUrl = typeof req.body.repoUrl === "string" ? req.body.repoUrl.trim() : "";
+  if (!repoUrl) {
+    res.status(400).json({ message: "请输入代码仓库 URL" });
+    return;
+  }
+  try {
+    await testRepoConnectivity(repoUrl);
+    res.json({ ok: true, message: "仓库连通正常" });
+  } catch (error) {
+    res.json({ ok: false, message: error instanceof Error ? error.message : "无法访问仓库" });
   }
 });
 
@@ -67,7 +83,7 @@ projectRouter.get("/:id", async (req, res) => {
 
 projectRouter.put("/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const { name, baseUrl } = req.body;
+  const { name, baseUrl, repoUrl, promptHint } = req.body;
   const variables = normalizeVariables(req.body.variables);
 
   if (!name || !baseUrl) {
@@ -78,7 +94,7 @@ projectRouter.put("/:id", async (req, res) => {
   try {
     const project = await prisma.project.update({
       where: { id },
-      data: { name, baseUrl, variables: { deleteMany: {}, create: variables } },
+      data: { name, baseUrl, repoUrl, promptHint: promptHint || null, variables: { deleteMany: {}, create: variables } },
       include: projectInclude,
     });
     res.json(project);

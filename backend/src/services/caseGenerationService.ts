@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { summarizeClaudeEvent } from "../infra/runClaude.js";
 
 export type TestCaseCandidate = {
   title: string;
@@ -8,32 +9,74 @@ export type TestCaseCandidate = {
 
 // 让 Claude 基于代码仓库读代码理解功能，生成 E2E 测试用例候选（自然语言步骤）。
 // 只读代码（Read/Glob/Grep），不加载项目 settings，不写文件。
-export async function generateTestCaseCandidates(repoPath: string, hint?: string): Promise<TestCaseCandidate[]> {
+type GenerationProject = {
+  variables: Array<{ name: string }>;
+  promptHint: string | null;
+};
+
+export type GenerateResult = {
+  candidates: TestCaseCandidate[];
+  logs: string[];
+};
+
+// 让 Claude 基于代码仓库读代码理解功能，生成 E2E 测试用例候选（自然语言步骤）。
+// 只读代码（Read/Glob/Grep），不写文件；返回候选与生成过程日志（供持久化与界面查看）。
+export async function generateTestCaseCandidates(
+  repoPath: string,
+  project: GenerationProject,
+  hint?: string,
+): Promise<GenerateResult> {
+  const logs: string[] = [];
+  const record = (message: string) => {
+    logs.push(message);
+    log(message);
+  };
+
+  record(`开始生成用例候选 cwd=${repoPath}`);
   const stream = query({
-    prompt: buildPrompt(hint),
+    prompt: buildPrompt(project, hint),
     options: {
       cwd: repoPath,
       permissionMode: "dontAsk",
       allowedTools: ["Read", "Glob", "Grep"],
-      settingSources: [],
+      // 只加载用户级 ~/.claude（含认证），不加载项目 .claude（避免 playwright-cli 等无关工具）。
+      settingSources: ["user"],
     },
   });
 
   let resultText = "";
   for await (const message of stream) {
+    const summary = summarizeClaudeEvent(message);
+    if (summary) {
+      record(summary);
+    }
     if (message.type === "result") {
       const result = message as { result?: string };
       resultText = typeof result.result === "string" ? result.result : "";
     }
   }
 
-  return parseCandidates(resultText);
+  const candidates = parseCandidates(resultText);
+  record(`解析出候选 ${candidates.length} 条`);
+  return { candidates, logs };
 }
 
-function buildPrompt(hint?: string): string {
-  const hintSection = hint?.trim()
-    ? `\n\n额外要求（用户指定，优先满足）：\n${hint.trim()}`
+function log(message: string) {
+  console.log(`[caseGeneration] ${message}`);
+}
+
+function buildPrompt(project: GenerationProject, hint?: string): string {
+  const variableNames = project.variables.map((v) => v.name.trim()).filter(Boolean);
+  const variableSection = variableNames.length
+    ? `\n\n项目变量（步骤里用 \${name} 形式占位引用，运行时自动替换为真实值，不要写死账号密码）：${variableNames.map((n) => "${" + n + "}").join("、")}`
     : "";
+  const projectHintSection = project.promptHint?.trim()
+    ? `\n\n项目业务约束（每次都遵守）：\n${project.promptHint.trim()}`
+    : "";
+  const userHintSection = hint?.trim()
+    ? `\n\n本次额外要求（优先满足）：\n${hint.trim()}`
+    : "";
+
   return `你是 E2E 测试用例设计专家。请基于当前代码仓库（用 Glob/Read/Grep 读代码：页面、组件、路由、API、状态管理），理解被测系统核心功能，生成覆盖主要功能的 E2E 测试用例。
 
 要求：
@@ -41,8 +84,8 @@ function buildPrompt(hint?: string): string {
 2. 每条用例覆盖一个可验证的功能点，步骤具体可执行。
 3. naturalLanguage 用中文编号步骤（1. 2. 3. ...），描述用户操作和预期结果。
 4. groupName 按功能模块归类（如"登录"、"用户管理"）。
-5. 生成 5-15 条用例。
-${hintSection}
+5. 生成 5-15 条用例。${variableSection}${projectHintSection}${userHintSection}
+
 只返回 JSON 数组，不要任何其它文字或 markdown：
 [{"title":"用例标题","groupName":"分组名","naturalLanguage":"1. 打开首页\\n2. 点击登录\\n3. 输入账号密码\\n4. 验证跳转首页"}]`;
 }

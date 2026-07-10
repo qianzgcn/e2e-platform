@@ -1,7 +1,7 @@
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, Drawer, Form, Input, Popconfirm, Space, Table, Typography, message } from "antd";
 import { useEffect, useState } from "react";
-import { createProject, deleteProject, updateProject, type ProjectPayload } from "../api/project";
+import { createProject, deleteProject, testRepoConnectivity, updateProject, type ProjectPayload } from "../api/project";
 import { useProject } from "../ProjectContext";
 import type { ProjectConfig } from "../types";
 
@@ -9,10 +9,11 @@ type ProjectForm = {
   name: string;
   baseUrl: string;
   repoUrl: string;
+  promptHint: string;
   variables: Array<{ name: string; value: string; description?: string | null }>;
 };
 
-const EMPTY_FORM: ProjectForm = { name: "", baseUrl: "", repoUrl: "", variables: [] };
+const EMPTY_FORM: ProjectForm = { name: "", baseUrl: "", repoUrl: "", promptHint: "", variables: [] };
 
 export function ProjectSettingsPage() {
   const { projects, reloadProjects } = useProject();
@@ -20,6 +21,7 @@ export function ProjectSettingsPage() {
   const [editing, setEditing] = useState<ProjectConfig | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testingRepo, setTestingRepo] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
 
   useEffect(() => {
@@ -38,6 +40,7 @@ export function ProjectSettingsPage() {
       name: project.name,
       baseUrl: project.baseUrl,
       repoUrl: project.repoUrl ?? "",
+      promptHint: project.promptHint ?? "",
       variables: project.variables ?? [],
     });
     setDrawerOpen(true);
@@ -60,6 +63,27 @@ export function ProjectSettingsPage() {
       messageApi.error(error instanceof Error ? error.message : "保存项目失败");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleTestRepo() {
+    const repoUrl = form.getFieldValue("repoUrl");
+    if (!repoUrl?.trim()) {
+      messageApi.warning("请先输入代码仓库 URL");
+      return;
+    }
+    setTestingRepo(true);
+    try {
+      const result = await testRepoConnectivity(repoUrl.trim());
+      if (result.ok) {
+        messageApi.success(result.message);
+      } else {
+        messageApi.error(result.message);
+      }
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "测试失败");
+    } finally {
+      setTestingRepo(false);
     }
   }
 
@@ -136,8 +160,22 @@ export function ProjectSettingsPage() {
           <Form.Item name="baseUrl" label="baseUrl" rules={[{ required: true, message: "请输入 baseUrl" }]}>
             <Input placeholder="http://localhost:5173" />
           </Form.Item>
-          <Form.Item name="repoUrl" label="代码仓库 URL" tooltip="AI 生成用例时 clone 该仓库读代码">
-            <Input placeholder="https://github.com/owner/repo.git" />
+          <Form.Item label="代码仓库 URL" tooltip="AI 生成用例时 clone 该仓库读代码">
+            <Space.Compact style={{ width: "100%" }}>
+              <Form.Item name="repoUrl" noStyle>
+                <Input placeholder="https://github.com/owner/repo.git" />
+              </Form.Item>
+              <Button onClick={() => void handleTestRepo()} loading={testingRepo}>
+                测试连通性
+              </Button>
+            </Space.Compact>
+          </Form.Item>
+
+          <Form.Item name="promptHint" label="项目业务约束" tooltip="AI 生成用例时遵守，如角色、特殊规则">
+            <Input.TextArea
+              placeholder="如：系统有三种角色（管理员/项目经理/项目成员），不同用例需用对应角色账号；新增类用例必须幂等"
+              autoSize={{ minRows: 2, maxRows: 6 }}
+            />
           </Form.Item>
 
           <Form.List name="variables">

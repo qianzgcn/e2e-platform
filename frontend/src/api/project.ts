@@ -1,7 +1,7 @@
 import { request } from "./client";
 import type { ProjectConfig } from "../types";
 
-export type ProjectPayload = Pick<ProjectConfig, "name" | "baseUrl" | "repoUrl" | "variables">;
+export type ProjectPayload = Pick<ProjectConfig, "name" | "baseUrl" | "repoUrl" | "promptHint" | "variables">;
 
 export function fetchProjects() {
   return request<ProjectConfig[]>("/project");
@@ -28,5 +28,12 @@ export function updateProject(id: number, data: ProjectPayload) {
 export function deleteProject(id: number) {
   return request<void>(`/project/${id}`, {
     method: "DELETE",
+  });
+}
+
+export function testRepoConnectivity(repoUrl: string) {
+  return request<{ ok: boolean; message: string }>("/project/test-repo", {
+    method: "POST",
+    body: JSON.stringify({ repoUrl }),
   });
 }

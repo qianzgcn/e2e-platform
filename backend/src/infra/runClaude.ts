@@ -94,7 +94,7 @@ function abortMessage(controller: AbortController, options: RunClaudeOptions): s
 }
 
 // 将 SDK 消息压缩成单行摘要，用于实时进度上报。
-function summarizeClaudeEvent(event: unknown): string | null {
+export function summarizeClaudeEvent(event: unknown): string | null {
   if (!isRecord(event)) return null;
 
   switch (event.type) {

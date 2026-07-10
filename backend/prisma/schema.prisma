@@ -24,15 +24,18 @@ enum RunLogStatus {
 }
 
 model Project {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  baseUrl   String
-  repoUrl   String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  variables ProjectVariable[]
-  groups    TestCaseGroup[]
-  testCases TestCase[]
+  id         Int      @id @default(autoincrement())
+  name       String   @unique
+  baseUrl    String
+  repoUrl    String?
+  promptHint String?  @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  variables  ProjectVariable[]
+  groups     TestCaseGroup[]
+  testCases  TestCase[]
+  generations TestCaseGeneration[]
+  candidates  TestCaseCandidate[]
 }
 
 model ProjectVariable {
@@ -97,4 +100,39 @@ model RunLog {
   finishedAt    DateTime?
 
   @@index([testCaseId])
+}
+
+enum CandidateStatus {
+  pending
+  imported
+}
+
+// 一次 AI 生成用例的批次：日志 + 当时提示。
+model TestCaseGeneration {
+  id        Int      @id @default(autoincrement())
+  projectId Int
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  logs      String   @db.Text
+  hint      String?  @db.Text
+  candidates TestCaseCandidate[]
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+}
+
+// AI 生成的候选用例，审核后导入为 TestCase。
+model TestCaseCandidate {
+  id              Int              @id @default(autoincrement())
+  projectId       Int
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  generationId    Int
+  generation      TestCaseGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  title           String
+  groupName       String
+  naturalLanguage String           @db.Text
+  status          CandidateStatus  @default(pending)
+  createdAt       DateTime         @default(now())
+
+  @@index([projectId])
+  @@index([generationId])
 }

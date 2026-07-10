@@ -37,9 +37,22 @@ export type TestCaseExcelRow = {
 };
 
 export type TestCaseCandidate = {
+  id: number;
+  projectId: number;
+  generationId: number;
   title: string;
   groupName: string;
   naturalLanguage: string;
+  status: "pending" | "imported";
+  createdAt: string;
+};
+
+export type TestCaseGeneration = {
+  id: number;
+  projectId: number;
+  logs: string;
+  hint: string | null;
+  createdAt: string;
 };
 
 export type TestCaseImportResult = {
@@ -78,6 +91,7 @@ export type ProjectConfig = {
   name: string;
   baseUrl: string;
   repoUrl?: string | null;
+  promptHint?: string | null;
   variables: ProjectVariable[];
 };
 
