@@ -19,8 +19,6 @@ export type GenerateResult = {
   logs: string[];
 };
 
-// 让 Claude 基于代码仓库读代码理解功能，生成 E2E 测试用例候选（自然语言步骤）。
-// 只读代码（Read/Glob/Grep），不写文件；返回候选与生成过程日志（供持久化与界面查看）。
 export async function generateTestCaseCandidates(
   repoPath: string,
   project: GenerationProject,

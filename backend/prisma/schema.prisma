@@ -107,7 +107,6 @@ enum CandidateStatus {
   imported
 }
 
-// 一次 AI 生成用例的批次：日志 + 当时提示。
 model TestCaseGeneration {
   id        Int      @id @default(autoincrement())
   projectId Int
@@ -120,7 +119,6 @@ model TestCaseGeneration {
   @@index([projectId])
 }
 
-// AI 生成的候选用例，审核后导入为 TestCase。
 model TestCaseCandidate {
   id              Int              @id @default(autoincrement())
   projectId       Int

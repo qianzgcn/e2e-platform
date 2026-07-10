@@ -14,7 +14,6 @@ type ProjectContextValue = {
 
 const ProjectContext = createContext<ProjectContextValue | null>(null);
 
-// 全局当前项目状态：顶部选择框切换，localStorage 持久化，所有页面按当前 projectId 加载数据。
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [loading, setLoading] = useState(true);

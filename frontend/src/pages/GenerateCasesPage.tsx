@@ -4,8 +4,6 @@ import { fetchCandidates, fetchGenerationLogs, generateTestCaseCandidates, impor
 import { useProject } from "../ProjectContext";
 import type { TestCaseCandidate, TestCaseGeneration } from "../types";
 
-// AI 基于项目代码仓库读代码生成用例候选 → 审核（编辑/勾选）→ 导入当前项目。
-// 候选与日志持久化，刷新页面不丢；可查看最近一次生成的日志。
 export function GenerateCasesPage() {
   const { currentProjectId } = useProject();
   const [candidates, setCandidates] = useState<TestCaseCandidate[]>([]);
@@ -97,9 +95,7 @@ export function GenerateCasesPage() {
       {contextHolder}
       <Typography.Title level={3}>AI 生成用例</Typography.Title>
       <Card>
-        <Typography.Paragraph type="secondary">
-          点击"生成候选"让 AI 基于项目代码仓库读代码生成用例（约 2-5 分钟）。生成后可编辑、勾选，再导入选中的到当前项目。候选持久化，刷新不丢。
-        </Typography.Paragraph>
+        <Typography.Paragraph type="secondary">AI 读取项目代码仓库生成用例候选，勾选后导入。生成约需 2-5 分钟。</Typography.Paragraph>
         <Input.TextArea
           value={hint}
           onChange={(e) => setHint(e.target.value)}

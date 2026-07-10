@@ -95,7 +95,7 @@ testCasesRouter.get("/", async (req, res) => {
   );
 });
 
-// 加载待审核的候选用例（刷新页面不丢）。
+// 加载待审核候选。
 testCasesRouter.get("/candidates", async (req, res) => {
   const projectId = Number(req.query.projectId);
   if (!Number.isInteger(projectId)) {
@@ -331,7 +331,7 @@ testCasesRouter.post("/generate", async (req, res) => {
   }
 });
 
-// 导入选中候选为 TestCase 并标记 imported。候选字段以请求传入为准（允许用户在审核时编辑）。
+// 导入选中候选为 TestCase。
 testCasesRouter.post("/candidates/import", async (req, res) => {
   const input = Array.isArray(req.body.candidates)
     ? (req.body.candidates as Array<{ id: number; title: string; groupName: string; naturalLanguage: string }>)
