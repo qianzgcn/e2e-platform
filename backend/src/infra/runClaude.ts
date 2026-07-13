@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import path from "node:path";
 
 const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
 const SUMMARY_MAX_LENGTH = 300;
@@ -41,14 +42,18 @@ async function drainClaudeStream(
   let resultText = "";
   let failed = false;
   let gotResult = false;
+  const cwd = options.cwd ?? process.cwd();
+  const env = { ...process.env, ...options.env };
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+  env[pathKey] = [path.resolve(cwd, "node_modules", ".bin"), env[pathKey]].filter(Boolean).join(path.delimiter);
 
   const stream = query({
     prompt,
     options: {
-      cwd: options.cwd ?? process.cwd(),
+      cwd,
       permissionMode: "dontAsk",
       abortController: controller,
-      env: { ...process.env, ...options.env },
+      env,
     },
   });
 

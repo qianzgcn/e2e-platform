@@ -1,9 +1,11 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { resetPlaywrightTestResults } from "../utils/cleanupService.js";
 
 const MAX_PLAYWRIGHT_OUTPUT_BUFFER = 1024 * 1024 * 10;
+const PLAYWRIGHT_CLI_PATH = createRequire(import.meta.url).resolve("@playwright/test/cli");
 
 export type PlaywrightResult = {
   success: boolean;
@@ -90,8 +92,8 @@ export async function runPlaywright(
 
 function createPlaywrightInvocation(specRelativePath: string): PlaywrightInvocation {
   return {
-    command: "npm",
-    args: ["run", "test:generated", "--", specRelativePath],
+    command: process.execPath,
+    args: [PLAYWRIGHT_CLI_PATH, "test", specRelativePath],
   };
 }
 
@@ -108,9 +110,10 @@ function runPlaywrightCommand(
 
     const child = spawn(invocation.command, invocation.args, {
       cwd: process.cwd(),
-      // 单独进程组方便停止时同时终止 npm、Playwright 和浏览器子进程。
-      detached: true,
+      // POSIX 使用独立进程组；Windows 的 detached 会创建独立控制台窗口，因此必须关闭。
+      detached: process.platform !== "win32",
       shell: false,
+      windowsHide: true,
       env: {
         ...process.env,
         PLAYWRIGHT_BASE_URL: baseUrl,
@@ -195,6 +198,14 @@ function toPlaywrightError(message: string, stdout: string, stderr: string, kill
 
 function killProcess(child: ChildProcessWithoutNullStreams) {
   if (!child.pid) {
+    return;
+  }
+
+  if (process.platform === "win32") {
+    spawnSync("taskkill.exe", ["/pid", String(child.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
     return;
   }
 
