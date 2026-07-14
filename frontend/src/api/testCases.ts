@@ -7,6 +7,7 @@ import type {
   TestCaseDetail,
   TestCaseExcelRow,
   TestCaseGeneration,
+  TestCaseGenerationSummary,
   TestCaseImportResult,
   TestCaseListItem,
   TestCasePayload,
@@ -91,10 +92,16 @@ export function importTestCases(projectId: number, rows: Array<TestCaseExcelRow 
 }
 
 export function generateTestCaseCandidates(projectId: number, hint?: string) {
-  return request<{ generationId: number; candidates: TestCaseCandidate[] }>("/test-cases/generate", {
+  return request<{ generationId: number }>("/test-cases/generate", {
     method: "POST",
     body: JSON.stringify({ projectId, hint }),
   });
+}
+
+export function fetchGenerationHistory(projectId: number) {
+  return request<{ generations: TestCaseGenerationSummary[] }>(
+    `/test-cases/generations?projectId=${projectId}`,
+  );
 }
 
 export function fetchCandidates(projectId: number) {

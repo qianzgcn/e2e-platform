@@ -107,14 +107,23 @@ enum CandidateStatus {
   imported
 }
 
+enum TestCaseGenerationStatus {
+  running
+  success
+  failed
+}
+
 model TestCaseGeneration {
-  id        Int      @id @default(autoincrement())
-  projectId Int
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  logs      String   @db.Text
-  hint      String?  @db.Text
-  candidates TestCaseCandidate[]
-  createdAt DateTime @default(now())
+  id            Int                      @id @default(autoincrement())
+  projectId     Int
+  project       Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status        TestCaseGenerationStatus @default(success)
+  logs          String                   @db.LongText
+  hint          String?                  @db.Text
+  failureReason String?                  @db.Text
+  candidates    TestCaseCandidate[]
+  createdAt     DateTime                  @default(now())
+  finishedAt    DateTime?
 
   @@index([projectId])
 }

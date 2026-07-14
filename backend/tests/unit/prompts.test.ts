@@ -8,6 +8,7 @@ import {
 import {
   buildScriptGenerationPrompt,
   loadScriptGenerationSystemPrompt,
+  parseScriptGenerationError,
 } from "../../src/prompts/scriptGeneration.js";
 
 test("case generation prompt keeps dynamic inputs as separate JSON fields", () => {
@@ -62,6 +63,34 @@ test("script generation prompt contains one case and project instructions", () =
   });
 });
 
+test("script generation error parser returns an actionable problem and suggestion", () => {
+  const result = parseScriptGenerationError(`无法继续生成：
+<script-generation-error>
+问题：步骤 2 要选择项目“示例项目”，但前置条件没有说明该项目应已存在，真实页面中也未找到该数据。
+修改建议：在前置步骤中创建“示例项目”，或把步骤 2 改为选择一个明确存在的项目变量。
+</script-generation-error>`);
+
+  assert.deepEqual(result, {
+    problem: "步骤 2 要选择项目“示例项目”，但前置条件没有说明该项目应已存在，真实页面中也未找到该数据。",
+    suggestion: "在前置步骤中创建“示例项目”，或把步骤 2 改为选择一个明确存在的项目变量。",
+  });
+});
+
+test("script generation error parser ignores success and rejects incomplete error reports", () => {
+  assert.equal(parseScriptGenerationError("脚本已生成并验证通过"), null);
+  assert.throws(
+    () => parseScriptGenerationError("<script-generation-error>\n问题：缺少前置数据"),
+    /格式不完整/,
+  );
+  assert.throws(
+    () =>
+      parseScriptGenerationError(
+        "<script-generation-error>\n问题： \n修改建议：补充数据\n</script-generation-error>",
+      ),
+    /缺少问题描述或修改建议/,
+  );
+});
+
 test("candidate parser accepts strict valid JSON and trims fields", () => {
   const candidates = parseTestCaseCandidates(`结果如下：
 \`\`\`json
@@ -95,4 +124,6 @@ test("system prompt files are available from the backend runtime directory", asy
 
   assert.match(casePrompt, /E2E 自然语言用例生成/);
   assert.match(scriptPrompt, /Playwright 自动化脚本生成/);
+  assert.match(scriptPrompt, /不得创建或覆盖 spec/);
+  assert.match(scriptPrompt, /修改建议/);
 });

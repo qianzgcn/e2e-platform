@@ -47,12 +47,21 @@ export type TestCaseCandidate = {
   createdAt: string;
 };
 
-export type TestCaseGeneration = {
+export type TestCaseGenerationStatus = "running" | "success" | "failed";
+
+export type TestCaseGenerationSummary = {
   id: number;
   projectId: number;
-  logs: string;
+  status: TestCaseGenerationStatus;
   hint: string | null;
+  failureReason: string | null;
+  candidateCount: number;
   createdAt: string;
+  finishedAt: string | null;
+};
+
+export type TestCaseGeneration = TestCaseGenerationSummary & {
+  logs: string;
 };
 
 export type TestCaseImportResult = {

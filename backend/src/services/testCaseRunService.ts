@@ -607,7 +607,9 @@ function resolveVariables(naturalLanguage: string, variables: ProjectVariable[])
     const value = variableMap.get(name);
 
     if (value === undefined) {
-      throw new Error(`变量 ${name} 未配置`);
+      throw new Error(
+        `变量 ${name} 未配置。请在项目设置中配置该变量，或修改用例中的 \${${name}} 占位符`,
+      );
     }
 
     return value;

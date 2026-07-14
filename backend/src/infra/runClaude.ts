@@ -11,7 +11,7 @@ type RunClaudeOptions = {
   timeout?: number;
   signal?: AbortSignal;
   stopReason?: string;
-  onProgress?: (message: string) => void;
+  onProgress?: (message: string) => void | Promise<void>;
   systemPrompt?: Options["systemPrompt"];
   tools?: Options["tools"];
   allowedTools?: Options["allowedTools"];
@@ -72,7 +72,7 @@ async function drainClaudeStream(
       const summary = summarizeClaudeEvent(message);
       if (summary) {
         pushRecent(recentEvents, summary);
-        options.onProgress?.(summary);
+        await options.onProgress?.(summary);
       }
 
       if (message.type === "result") {

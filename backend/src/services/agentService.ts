@@ -1,7 +1,10 @@
+import { rm } from "node:fs/promises";
+import path from "node:path";
 import { runClaude } from "../infra/runClaude.js";
 import {
   buildScriptGenerationPrompt,
   loadScriptGenerationSystemPrompt,
+  parseScriptGenerationError,
   type ScriptSource,
 } from "../prompts/scriptGeneration.js";
 
@@ -22,7 +25,8 @@ export async function generateScript(testCase: ScriptSource, baseUrl: string, op
   logAgent("准备调用 Claude 生成", { caseId: testCase.id, baseUrl, promptLength: prompt.length });
 
   try {
-    await runClaude(prompt, {
+    await removeTargetScript(testCase.id);
+    const result = await runClaude(prompt, {
       cwd: process.cwd(),
       signal: options.signal,
       stopReason: options.stopReason,
@@ -37,12 +41,30 @@ export async function generateScript(testCase: ScriptSource, baseUrl: string, op
       settingSources: ["user", "project"],
       skills: ["playwright-cli"],
     });
+
+    const generationError = parseScriptGenerationError(result);
+    if (generationError) {
+      throw new Error(
+        `用例无法生成自动化脚本\n问题：${generationError.problem}\n修改建议：${generationError.suggestion}`,
+      );
+    }
     logAgent("Claude 生成完成", { caseId: testCase.id });
   } catch (error) {
+    await removeTargetScript(testCase.id).catch((cleanupError) => {
+      logAgent("清理未完成脚本失败", {
+        caseId: testCase.id,
+        message: cleanupError instanceof Error ? cleanupError.message : "未知错误",
+      });
+    });
     const message = error instanceof Error ? error.message : "Claude 生成用例失败";
     logAgent("Claude 生成失败", { caseId: testCase.id, message });
     throw new Error(message);
   }
+}
+
+function removeTargetScript(testCaseId: string) {
+  const specPath = path.resolve(process.cwd(), "tests", "generated", `${testCaseId}.spec.ts`);
+  return rm(specPath, { force: true });
 }
 
 function logAgent(message: string, data?: unknown) {

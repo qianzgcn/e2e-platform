@@ -1,3 +1,4 @@
+import path from "node:path";
 import { runClaude } from "../infra/runClaude.js";
 import {
   buildCaseGenerationPrompt,
@@ -17,21 +18,29 @@ type GenerationProject = {
 
 export type GenerateResult = {
   candidates: TestCaseCandidate[];
-  logs: string[];
+};
+
+type GenerateOptions = {
+  onProgress?: (message: string) => void | Promise<void>;
 };
 
 export async function generateTestCaseCandidates(
   repoPath: string,
   project: GenerationProject,
   hint?: string,
+  options: GenerateOptions = {},
 ): Promise<GenerateResult> {
-  const logs: string[] = [];
-  const record = (message: string) => {
-    logs.push(message);
+  let lastProgress = "";
+  const record = async (message: string) => {
+    if (message === lastProgress) {
+      return;
+    }
+    lastProgress = message;
     log(message);
+    await options.onProgress?.(message);
   };
 
-  record(`开始生成用例候选 cwd=${repoPath}`);
+  await record("正在启动 AI 分析代码仓库");
   const resultText = await runClaude(buildCaseGenerationPrompt(project, hint), {
     cwd: repoPath,
     systemPrompt: {
@@ -43,12 +52,60 @@ export async function generateTestCaseCandidates(
     allowedTools: ["Read", "Glob", "Grep"],
     settingSources: ["user"],
     skills: [],
-    onProgress: record,
+    onProgress: async (message) => {
+      const progress = formatCaseGenerationProgress(message, repoPath);
+      if (progress) {
+        await record(progress);
+      }
+    },
   });
 
+  await record("AI 响应完成，正在校验候选格式");
   const candidates = parseTestCaseCandidates(resultText);
-  record(`解析出候选 ${candidates.length} 条`);
-  return { candidates, logs };
+  await record(`候选格式校验通过，共 ${candidates.length} 条`);
+  return { candidates };
+}
+
+export function formatCaseGenerationProgress(message: string, repoPath: string): string | null {
+  if (message.startsWith("初始化 ")) {
+    return "AI 已启动，开始分析代码仓库";
+  }
+  if (message.startsWith("调用工具 Read ")) {
+    const filePath = message.slice("调用工具 Read ".length).trim();
+    return `正在阅读文件：${toDisplayPath(filePath, repoPath)}`;
+  }
+  if (message.startsWith("调用工具 Glob")) {
+    return `正在扫描代码结构：${extractDetail(message, "pattern") ?? "项目文件"}`;
+  }
+  if (message.startsWith("调用工具 Grep")) {
+    return `正在检索代码：${extractDetail(message, "pattern") ?? "业务实现"}`;
+  }
+  if (message.startsWith("回复 ")) {
+    return "AI 正在整理候选用例";
+  }
+  if (message.startsWith("完成 ")) {
+    const turns = extractDetail(message, "turns");
+    const rawDurationMs = extractDetail(message, "durationMs");
+    const durationMs = rawDurationMs ? Number(rawDurationMs) : Number.NaN;
+    const duration = Number.isFinite(durationMs) ? `${Math.ceil(durationMs / 1000)} 秒` : "未知耗时";
+    return `AI 分析完成（${turns ?? "未知"} 轮，${duration}）`;
+  }
+  if (message.startsWith("工具错误 ") || message.startsWith("失败 ")) {
+    return "AI 分析失败，正在整理错误信息";
+  }
+  return null;
+}
+
+function extractDetail(message: string, key: string): string | null {
+  const match = message.match(new RegExp(`${key}=([^\\s]+)`));
+  return match?.[1] ?? null;
+}
+
+function toDisplayPath(filePath: string, repoPath: string): string {
+  const relativePath = path.relative(repoPath, filePath);
+  return relativePath && !relativePath.startsWith("..")
+    ? relativePath.replaceAll(path.sep, "/")
+    : filePath.replaceAll("\\", "/");
 }
 
 function log(message: string) {

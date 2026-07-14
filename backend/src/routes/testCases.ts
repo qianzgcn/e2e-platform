@@ -4,9 +4,8 @@ import { prisma } from "../infra/prisma.js";
 import { getLatestArtifacts } from "../utils/artifactService.js";
 import { removePlaywrightTestResults } from "../utils/cleanupService.js";
 import { resolveScriptGenerationOnSave } from "../utils/testCaseScriptGeneration.js";
-import { generateTestCaseCandidates } from "../services/caseGenerationService.js";
+import { startCaseGeneration } from "../services/caseGenerationJobService.js";
 import { runAllTestCases, runTestCase, runTestCases, stopTestCaseRun } from "../services/testCaseRunService.js";
-import { ensureRepo } from "../infra/repoService.js";
 
 export const testCasesRouter = Router();
 
@@ -107,6 +106,38 @@ testCasesRouter.get("/candidates", async (req, res) => {
     orderBy: { id: "asc" },
   });
   res.json({ candidates });
+});
+
+// 按项目查看最近的 AI 用例生成记录；日志详情通过 /generations/:id 按需加载。
+testCasesRouter.get("/generations", async (req, res) => {
+  const projectId = Number(req.query.projectId);
+  if (!Number.isInteger(projectId)) {
+    res.status(400).json({ message: "projectId 必填" });
+    return;
+  }
+
+  const generations = await prisma.testCaseGeneration.findMany({
+    where: { projectId },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+    select: {
+      id: true,
+      projectId: true,
+      status: true,
+      hint: true,
+      failureReason: true,
+      createdAt: true,
+      finishedAt: true,
+      _count: { select: { candidates: true } },
+    },
+  });
+
+  res.json({
+    generations: generations.map(({ _count, ...generation }) => ({
+      ...generation,
+      candidateCount: _count.candidates,
+    })),
+  });
 });
 
 testCasesRouter.get("/:id", async (req, res) => {
@@ -291,40 +322,9 @@ testCasesRouter.post("/generate", async (req, res) => {
   }
   const hint = typeof req.body.hint === "string" ? req.body.hint : undefined;
   try {
-    const project = await prisma.project.findUnique({
-      where: { id: projectId },
-      select: { repoUrl: true, promptHint: true, variables: { select: { name: true } } },
-    });
-    if (!project) {
-      res.status(404).json({ message: "项目不存在" });
-      return;
-    }
-    if (!project.repoUrl) {
-      res.status(400).json({ message: "项目未配置代码仓库（repoUrl）" });
-      return;
-    }
     console.log(`[testCases] 生成用例请求 projectId=${projectId} hint=${hint ? "有" : "无"}`);
-    const repoPath = await ensureRepo(project.repoUrl, projectId);
-    const { candidates, logs } = await generateTestCaseCandidates(repoPath, project, hint);
-    console.log(`[testCases] 生成完成 ${candidates.length} 条候选`);
-
-    const generation = await prisma.testCaseGeneration.create({
-      data: {
-        projectId,
-        logs: logs.join("\n"),
-        hint: hint ?? null,
-        candidates: {
-          create: candidates.map((candidate) => ({
-            projectId,
-            title: candidate.title,
-            groupName: candidate.groupName,
-            naturalLanguage: candidate.naturalLanguage,
-          })),
-        },
-      },
-      include: { candidates: { orderBy: { id: "asc" } } },
-    });
-    res.json({ generationId: generation.id, candidates: generation.candidates });
+    const generation = await startCaseGeneration(projectId, hint);
+    res.status(202).json(generation);
   } catch (error) {
     console.error("[testCases] 生成用例失败", error instanceof Error ? error.message : error);
     res.status(400).json({ message: error instanceof Error ? error.message : "生成用例失败" });
@@ -362,12 +362,16 @@ testCasesRouter.post("/candidates/import", async (req, res) => {
 // 查看某次生成的日志。
 testCasesRouter.get("/generations/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const generation = await prisma.testCaseGeneration.findUnique({ where: { id } });
+  const generation = await prisma.testCaseGeneration.findUnique({
+    where: { id },
+    include: { _count: { select: { candidates: true } } },
+  });
   if (!generation) {
     res.status(404).json({ message: "生成记录不存在" });
     return;
   }
-  res.json(generation);
+  const { _count, ...detail } = generation;
+  res.json({ ...detail, candidateCount: _count.candidates });
 });
 
 testCasesRouter.post("/export-rows", async (req, res) => {

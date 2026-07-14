@@ -2,9 +2,12 @@
 CREATE TABLE IF NOT EXISTS `TestCaseGeneration` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `projectId` INT NOT NULL,
-  `logs` TEXT NOT NULL,
+  `status` ENUM('running','success','failed') NOT NULL DEFAULT 'success',
+  `logs` LONGTEXT NOT NULL,
   `hint` TEXT NULL,
+  `failureReason` TEXT NULL,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `finishedAt` DATETIME(3) NULL,
   PRIMARY KEY (`id`),
   INDEX `TestCaseGeneration_projectId_idx` (`projectId`),
   CONSTRAINT `TestCaseGeneration_projectId_fkey` FOREIGN KEY (`projectId`) REFERENCES `Project`(`id`) ON DELETE CASCADE
