@@ -19,6 +19,7 @@ type SharedRunningStatus = "queued" | "generating" | "running" | "success" | "fa
 
 type ProjectConfig = {
   baseUrl: string;
+  promptHint: string | null;
   variables: ProjectVariable[];
 };
 
@@ -41,8 +42,9 @@ type RunTargetTestCase = {
 type RunTask = {
   runLogId: number;
   testCase: RunTargetTestCase;
-  // 提交时的项目 baseUrl 快照，生成和执行都以此为准，避免 worker 反复查库。
+  // 提交时的项目配置快照，生成和执行都以此为准，避免 worker 反复查库。
   baseUrl: string;
+  projectInstructions: string | null;
   generationLogLines?: string[];
 };
 
@@ -139,7 +141,7 @@ async function submitRunTargets(testCases: RunTargetTestCase[]) {
   }
 
   const project = await getProject(runnableTestCases[0].projectId);
-  const queuedResult = await createQueuedRunTasks(runnableTestCases, project.baseUrl);
+  const queuedResult = await createQueuedRunTasks(runnableTestCases, project.baseUrl, project.promptHint);
   dispatchTasks(queuedResult.tasks, project);
 
   const allSkippedCases = [...skippedCases, ...queuedResult.skippedCases];
@@ -247,7 +249,11 @@ export async function stopTestCaseRun(testCaseId: string): Promise<StopRunResult
   return toStopRunResult(targets);
 }
 
-async function createQueuedRunTasks(testCases: RunTargetTestCase[], baseUrl: string) {
+async function createQueuedRunTasks(
+  testCases: RunTargetTestCase[],
+  baseUrl: string,
+  projectInstructions: string | null,
+) {
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const tasks: RunTask[] = [];
@@ -295,7 +301,7 @@ async function createQueuedRunTasks(testCases: RunTargetTestCase[], baseUrl: str
         },
       });
 
-      tasks.push({ runLogId: runLog.id, testCase, baseUrl });
+      tasks.push({ runLogId: runLog.id, testCase, baseUrl, projectInstructions });
       logRun("创建运行日志并设置排队中", {
         runLogId: runLog.id,
         testCaseId: testCase.id,
@@ -348,6 +354,7 @@ async function generateSingleScript(item: GenerationItem, sessionId: string) {
       signal: control.controller.signal,
       stopReason: USER_STOP_FAILURE_REASON,
       onProgress: (message) => appendGenerationLog(task, message),
+      projectInstructions: task.projectInstructions,
       sessionId,
     });
   } catch (error) {
@@ -584,6 +591,7 @@ async function getProject(projectId: number) {
   logRun("读取项目配置", {
     projectId: project.id,
     baseUrl: project.baseUrl,
+    hasPromptHint: Boolean(project.promptHint?.trim()),
     variableCount: project.variables.length,
   });
   return project;

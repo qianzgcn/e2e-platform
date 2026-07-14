@@ -8,6 +8,7 @@
     "build": "tsc",
     "postinstall": "patch-package",
     "start": "node dist/index.js",
+    "test:unit": "tsx --test tests/unit/*.test.ts",
     "prisma:generate": "prisma generate",
     "test:generated": "playwright test",
     "test:generated:headed": "playwright test --headed",

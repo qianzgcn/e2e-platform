@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   resolveScriptGenerationOnSave,
   shouldGenerateScript,
-} from "../../src/services/testCaseScriptGeneration.js";
+} from "../../src/utils/testCaseScriptGeneration.js";
 
 test("shouldGenerateScript only enters agent when marked or script is empty", () => {
   assert.equal(shouldGenerateScript({ scriptNeedsGeneration: false, playwrightScript: "test('ok')" }), false);

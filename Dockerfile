@@ -39,9 +39,9 @@ RUN npm run prisma:generate \
     && npm prune --omit=dev --omit=optional \
     && mkdir -p /app/runtime/tests \
     && cp package*.json /app/runtime/ \
-    && cp -R node_modules dist sql .claude .playwright /app/runtime/ \
+    && cp -R node_modules dist sql prompts .claude .playwright /app/runtime/ \
     && cp -R tests/utils /app/runtime/tests/utils \
-    && cp playwright.config.ts CLAUDE.md /app/runtime/
+    && cp playwright.config.ts /app/runtime/
 
 FROM node-base AS runner
 

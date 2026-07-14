@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AsyncQueue } from "../../src/services/asyncQueue.js";
+import { AsyncQueue } from "../../src/infra/asyncQueue.js";
 
 test("AsyncQueue: 多 worker 并发消费，每个元素只被消费一次", async () => {
   const queue = new AsyncQueue<number>();

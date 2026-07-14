@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import path from "node:path";
 
 const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
@@ -12,6 +12,11 @@ type RunClaudeOptions = {
   signal?: AbortSignal;
   stopReason?: string;
   onProgress?: (message: string) => void;
+  systemPrompt?: Options["systemPrompt"];
+  tools?: Options["tools"];
+  allowedTools?: Options["allowedTools"];
+  settingSources?: Options["settingSources"];
+  skills?: Options["skills"];
 };
 
 // 通过 Claude Agent SDK 执行一次生成任务，返回最终结果文本；失败时抛出带可读原因的 Error。
@@ -54,6 +59,11 @@ async function drainClaudeStream(
       permissionMode: "dontAsk",
       abortController: controller,
       env,
+      systemPrompt: options.systemPrompt,
+      tools: options.tools,
+      allowedTools: options.allowedTools,
+      settingSources: options.settingSources,
+      skills: options.skills,
     },
   });
 
@@ -111,8 +121,10 @@ export function summarizeClaudeEvent(event: unknown): string | null {
       return event.subtype === "init"
         ? `初始化 cwd=${asText(event.cwd)} tools=${asArray(event.tools).length}`
         : null;
-    case "result":
-      return `${event.is_error === true ? "失败" : "完成"} turns=${asNumber(event.num_turns)} durationMs=${asNumber(event.duration_ms)} ${truncate(asText(event.result))}`;
+    case "result": {
+      const result = asText(event.result);
+      return `${event.is_error === true ? "失败" : "完成"} turns=${asNumber(event.num_turns)} durationMs=${asNumber(event.duration_ms)} resultLength=${result.length}`;
+    }
     default:
       return null;
   }
@@ -126,7 +138,7 @@ function summarizeAssistant(message: unknown): string | null {
   for (const item of content) {
     if (!isRecord(item)) continue;
     if (item.type === "text") {
-      return `回复 ${truncate(asText(item.text))}`;
+      return `回复 textLength=${asText(item.text).length}`;
     }
     if (item.type === "tool_use") {
       const name = asText(item.name, "unknown");
@@ -144,7 +156,7 @@ function summarizeToolError(message: unknown): string | null {
 
   for (const item of content) {
     if (isRecord(item) && item.type === "tool_result" && item.is_error === true) {
-      return `工具错误 ${truncate(asText(item.content))}`;
+      return `工具错误 contentLength=${asText(item.content).length}`;
     }
   }
   return null;
@@ -155,11 +167,15 @@ function toolUseDetail(input: unknown): string {
   if (!isRecord(input)) return "";
   const parts: string[] = [];
 
-  for (const key of ["file_path", "path", "pattern", "command", "cmd", "description"]) {
+  for (const key of ["file_path", "path", "pattern"]) {
     const value = input[key];
     if (typeof value === "string") {
       parts.push(key === "file_path" ? truncate(value) : `${key}=${truncate(value)}`);
     }
+  }
+  for (const key of ["command", "cmd", "description"]) {
+    const value = input[key];
+    if (typeof value === "string") parts.push(`${key}Length=${value.length}`);
   }
   for (const key of ["content", "old_string", "new_string"]) {
     const value = input[key];
