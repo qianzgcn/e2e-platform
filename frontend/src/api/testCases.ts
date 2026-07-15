@@ -1,6 +1,8 @@
 import { request } from "./client";
 import type {
   LatestRunDetail,
+  TestCaseLogDetail,
+  TestCaseLogHistory,
   RunRequestResult,
   StopRunResult,
   TestCaseCandidate,
@@ -98,6 +100,20 @@ export function generateTestCaseCandidates(projectId: number, hint?: string) {
   });
 }
 
+export function repairTestCase(id: string) {
+  return request<{ repairLogId: number }>(`/test-cases/${id}/repair`, {
+    method: "POST",
+  });
+}
+
+export function fetchTestCaseLogs(id: string, page = 1, pageSize = 20) {
+  return request<TestCaseLogHistory>(`/test-cases/${id}/logs?page=${page}&pageSize=${pageSize}`);
+}
+
+export function fetchTestCaseLogDetail(testCaseId: string, logId: number) {
+  return request<TestCaseLogDetail>(`/test-cases/${testCaseId}/logs/${logId}`);
+}
+
 export function fetchGenerationHistory(projectId: number) {
   return request<{ generations: TestCaseGenerationSummary[] }>(
     `/test-cases/generations?projectId=${projectId}`,
@@ -112,6 +128,19 @@ export function importCandidates(candidates: TestCaseCandidate[]) {
   return request<{ createdCount: number; skippedCount: number }>("/test-cases/candidates/import", {
     method: "POST",
     body: JSON.stringify({ candidates }),
+  });
+}
+
+export function applyRepairCandidate(id: number, naturalLanguage: string) {
+  return request<{ updated: boolean; testCaseId: string }>(`/test-cases/candidates/${id}/apply-repair`, {
+    method: "POST",
+    body: JSON.stringify({ naturalLanguage }),
+  });
+}
+
+export function rejectRepairCandidate(id: number) {
+  return request<{ rejected: boolean }>(`/test-cases/candidates/${id}/reject`, {
+    method: "POST",
   });
 }
 

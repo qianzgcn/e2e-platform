@@ -10,6 +10,14 @@ import {
   loadScriptGenerationSystemPrompt,
   parseScriptGenerationError,
 } from "../../src/prompts/scriptGeneration.js";
+import {
+  assertNoProjectVariableValues,
+  assertPreservesVariablePlaceholders,
+  buildScriptRepairPrompt,
+  loadScriptRepairSystemPrompt,
+  parseScriptRepairResult,
+  redactProjectVariableValues,
+} from "../../src/prompts/scriptRepair.js";
 
 test("case generation prompt keeps dynamic inputs as separate JSON fields", () => {
   const project = {
@@ -91,6 +99,73 @@ test("script generation error parser ignores success and rejects incomplete erro
   );
 });
 
+test("script repair prompt keeps evidence fields inside valid JSON", () => {
+  const input = {
+    baseUrl: "http://localhost:5173",
+    targetFile: "tests/generated/case-1.spec.ts",
+    businessRepository: "C:/repo/business",
+    projectInstructions: "仅管理员可操作",
+    testCase: {
+      id: "case-1",
+      title: "新增用户",
+      originalNaturalLanguage: "1. 输入 ${username}\n2. 保存",
+      resolvedNaturalLanguage: "1. 输入 admin\n2. 保存",
+    },
+    currentScript: "test('新增用户', async () => {})",
+    sourceFailure: {
+      runLogId: 12,
+      failureReason: "按钮不可见",
+      stdout: "line 1\nline 2",
+      stderr: "locator timeout",
+      artifactPaths: ["C:/results/error-context.md"],
+      videoFramePaths: ["C:/frames/frame-1.png"],
+    },
+  };
+
+  assert.deepEqual(JSON.parse(buildScriptRepairPrompt(input)), input);
+});
+
+test("script repair result parser accepts exactly three strict outcomes", () => {
+  assert.deepEqual(
+    parseScriptRepairResult('<script-repair-result>{"outcome":"script_repair","summary":"修正按钮定位"}</script-repair-result>'),
+    { outcome: "script_repair", summary: "修正按钮定位" },
+  );
+  assert.deepEqual(
+    parseScriptRepairResult('<script-repair-result>{"outcome":"case_repair","problem":"缺少前置项目","suggestion":"补充项目变量","naturalLanguage":"1. 选择 ${project}"}</script-repair-result>'),
+    { outcome: "case_repair", problem: "缺少前置项目", suggestion: "补充项目变量", naturalLanguage: "1. 选择 ${project}" },
+  );
+  assert.deepEqual(
+    parseScriptRepairResult('<script-repair-result>{"outcome":"unrepairable","category":"business","problem":"接口返回错误","suggestion":"修复业务接口"}</script-repair-result>'),
+    { outcome: "unrepairable", category: "business", problem: "接口返回错误", suggestion: "修复业务接口" },
+  );
+  assert.throws(
+    () => parseScriptRepairResult('<script-repair-result>{"outcome":"script_repair","summary":"ok","extra":true}</script-repair-result>'),
+    /格式无效/,
+  );
+  assert.throws(() => parseScriptRepairResult("没有结果块"), /完整的修复结果/);
+});
+
+test("repair candidate rejects real project variable values and redacts messages", () => {
+  const variables = [{ name: "password", value: "SuperSecret" }];
+  assert.throws(
+    () => assertNoProjectVariableValues("1. 输入 SuperSecret", variables),
+    /变量 password 的真实值/,
+  );
+  assert.doesNotThrow(() => assertNoProjectVariableValues("1. 输入 ${password}", variables));
+  assert.equal(redactProjectVariableValues("密码 SuperSecret 无效", variables), "密码 ${password} 无效");
+});
+
+test("repair candidate preserves every variable placeholder from the source case", () => {
+  assert.doesNotThrow(() => assertPreservesVariablePlaceholders(
+    "1. 输入 ${ username }\n2. 输入 ${password}",
+    "1. 输入 ${username}\n2. 输入 ${password}\n3. 提交",
+  ));
+  assert.throws(
+    () => assertPreservesVariablePlaceholders("1. 输入 ${username}\n2. 输入 ${password}", "1. 输入 ${username}"),
+    /缺少原用例变量 \$\{password\}/,
+  );
+});
+
 test("candidate parser accepts strict valid JSON and trims fields", () => {
   const candidates = parseTestCaseCandidates(`结果如下：
 \`\`\`json
@@ -117,13 +192,16 @@ test("candidate parser rejects invalid candidate structures", () => {
 });
 
 test("system prompt files are available from the backend runtime directory", async () => {
-  const [casePrompt, scriptPrompt] = await Promise.all([
+  const [casePrompt, scriptPrompt, repairPrompt] = await Promise.all([
     loadCaseGenerationSystemPrompt(),
     loadScriptGenerationSystemPrompt(),
+    loadScriptRepairSystemPrompt(),
   ]);
 
   assert.match(casePrompt, /E2E 自然语言用例生成/);
   assert.match(scriptPrompt, /Playwright 自动化脚本生成/);
   assert.match(scriptPrompt, /不得创建或覆盖 spec/);
   assert.match(scriptPrompt, /修改建议/);
+  assert.match(repairPrompt, /Playwright 自动化用例修复/);
+  assert.match(repairPrompt, /case_repair/);
 });

@@ -27,7 +27,6 @@ export function resolveScriptGenerationOnSave(
       scriptNeedsGeneration: true,
       resetRunState: true,
       clearScript: hasScript,
-      clearRunHistory: true,
     };
   }
 
@@ -38,7 +37,6 @@ export function resolveScriptGenerationOnSave(
     scriptNeedsGeneration,
     resetRunState: scriptNeedsGeneration,
     clearScript: hasScript && scriptNeedsGeneration,
-    clearRunHistory: scriptNeedsGeneration,
   };
 }
 

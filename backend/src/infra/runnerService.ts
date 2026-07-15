@@ -17,6 +17,7 @@ export type PlaywrightResult = {
 type RunPlaywrightOptions = {
   signal?: AbortSignal;
   stopReason?: string;
+  specPath?: string;
 };
 
 type PlaywrightInvocation = {
@@ -29,22 +30,20 @@ export async function runPlaywright(
   script: string,
   baseUrl: string,
   testCaseId: string,
+  runLogId: number | string,
   options: RunPlaywrightOptions = {},
 ): Promise<PlaywrightResult> {
-  logRunner("准备执行 Playwright", { testCaseId, baseUrl });
-  const generatedDir = path.resolve(process.cwd(), "tests", "generated");
-  await mkdir(generatedDir, { recursive: true });
+  logRunner("准备执行 Playwright", { testCaseId, runLogId, baseUrl });
+  // 正常运行固定使用用例 id 命名；修复验证可以显式传入独立候选文件。
+  const specPath = options.specPath ?? path.resolve(process.cwd(), "tests", "generated", `${testCaseId}.spec.ts`);
 
-  // 生成文件固定使用用例 id 命名，避免标题变更后留下旧文件。
-  const specFileName = `${testCaseId}.spec.ts`;
-  const specPath = path.join(generatedDir, specFileName);
-
+  await mkdir(path.dirname(specPath), { recursive: true });
   await writeFile(specPath, script, "utf8");
   logRunner("写入 Playwright spec 文件", { testCaseId, specPath, scriptLength: script.length });
 
-  // 每个用例只保留最新一次产物，运行前先清空该用例自己的结果目录。
-  const testResultsDir = await resetPlaywrightTestResults(testCaseId);
-  logRunner("重建 Playwright 产物目录", { testCaseId, testResultsDir });
+  // 每次运行使用独立批次目录，仅清理当前批次，历史产物继续保留。
+  const testResultsDir = await resetPlaywrightTestResults(testCaseId, runLogId);
+  logRunner("重建 Playwright 产物目录", { testCaseId, runLogId, testResultsDir });
 
   try {
     // Playwright 的退出码就是运行结果：0 表示通过，非 0 表示失败或执行异常。
@@ -58,7 +57,7 @@ export async function runPlaywright(
         PLAYWRIGHT_TEST_CASE_ID: testCaseId,
       },
     });
-    const { stdout, stderr } = await runPlaywrightCommand(invocation, baseUrl, testCaseId, options);
+    const { stdout, stderr } = await runPlaywrightCommand(invocation, baseUrl, testCaseId, runLogId, options);
 
     logRunner("Playwright 执行成功", {
       testCaseId,
@@ -101,6 +100,7 @@ function runPlaywrightCommand(
   invocation: PlaywrightInvocation,
   baseUrl: string,
   testCaseId: string,
+  runLogId: number | string,
   options: RunPlaywrightOptions,
 ) {
   return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
@@ -118,6 +118,7 @@ function runPlaywrightCommand(
         ...process.env,
         PLAYWRIGHT_BASE_URL: baseUrl,
         PLAYWRIGHT_TEST_CASE_ID: testCaseId,
+        PLAYWRIGHT_RUN_LOG_ID: String(runLogId),
       },
     });
 

@@ -7,6 +7,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
   StopOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
 import { Alert, Button, Input, Modal, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnType } from "antd/es/table";
@@ -25,6 +26,7 @@ import {
   runAllTestCases,
   runTestCase,
   runTestCases,
+  repairTestCase,
   stopTestCase,
   updateTestCase,
 } from "../api/testCases";
@@ -64,6 +66,7 @@ export function TestCasePage() {
   const [editingCase, setEditingCase] = useState<TestCaseDetail | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [runLogItem, setRunLogItem] = useState<TestCaseListItem | null>(null);
+  const [focusRunLogId, setFocusRunLogId] = useState<number | null>(null);
   const navigate = useNavigate();
   const importInputRef = useRef<HTMLInputElement>(null);
   const [messageApi, contextHolder] = message.useMessage();
@@ -184,6 +187,27 @@ export function TestCasePage() {
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "运行失败");
     }
+  }
+
+  function handleRepair(item: TestCaseListItem) {
+    modal.confirm({
+      title: "AI 修复失败用例",
+      content: "AI 将分析失败日志、录屏、业务代码和真实页面。只有脚本修复验证通过后才会替换当前脚本；用例内容问题会生成待审核候选。",
+      okText: "开始修复",
+      cancelText: "取消",
+      async onOk() {
+        try {
+          const { repairLogId } = await repairTestCase(item.id);
+          setFocusRunLogId(repairLogId);
+          setRunLogItem(item);
+          await loadTestCases(false);
+          messageApi.success("AI 修复任务已开始");
+        } catch (error) {
+          messageApi.error(error instanceof Error ? error.message : "AI 修复提交失败");
+          throw error;
+        }
+      },
+    });
   }
 
   async function handleDelete(item: TestCaseListItem) {
@@ -395,6 +419,7 @@ export function TestCasePage() {
   }
 
   function showRunLog(item: TestCaseListItem) {
+    setFocusRunLogId(null);
     setRunLogItem(item);
   }
 
@@ -534,8 +559,17 @@ export function TestCasePage() {
                     </span>
                   </Tooltip>
                 ) : (
-                  <StatusTag status={record.status} />
+                  <StatusTag status={record.status} kind={record.activeRunKind} />
                 ),
+            },
+            {
+              title: "修复候选",
+              width: 120,
+              render: (_, record) => record.pendingRepairCandidateId ? (
+                <Button type="link" className="!px-0" onClick={() => navigate(`/generate-cases?candidateId=${record.pendingRepairCandidateId}`)}>
+                  待审核
+                </Button>
+              ) : "—",
             },
             {
               title: "需生成脚本",
@@ -562,7 +596,7 @@ export function TestCasePage() {
             },
             {
               title: "操作",
-              width: 100,
+              width: 150,
               fixed: "right",
               render: (_, record) => (
                 <Space>
@@ -575,6 +609,11 @@ export function TestCasePage() {
                       <Tooltip title="运行">
                         <Button icon={<PlayCircleOutlined />} onClick={() => void handleRun(record)} />
                       </Tooltip>
+                      {record.status === "failed" && !record.scriptNeedsGeneration && !record.pendingRepairCandidateId ? (
+                        <Tooltip title="AI 修复">
+                          <Button icon={<ToolOutlined />} onClick={() => handleRepair(record)} />
+                        </Tooltip>
+                      ) : null}
                       <Tooltip title="删除">
                         <Button danger icon={<DeleteOutlined />} onClick={() => void handleDelete(record)} />
                       </Tooltip>
@@ -599,7 +638,15 @@ export function TestCasePage() {
         onCreateGroup={handleCreateGroup}
       />
 
-      <RunLogModal target={runLogItem} onClose={() => setRunLogItem(null)} />
+      <RunLogModal
+        target={runLogItem}
+        focusLogId={focusRunLogId}
+        onClose={() => {
+          setRunLogItem(null);
+          setFocusRunLogId(null);
+        }}
+        onStatusChange={() => void loadTestCases(false)}
+      />
     </div>
   );
 }

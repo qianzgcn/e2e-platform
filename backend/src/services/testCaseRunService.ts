@@ -1,10 +1,20 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { generateScript, type ScriptSource } from "./agentService.js";
 import { AsyncQueue } from "../infra/asyncQueue.js";
 import { prisma } from "../infra/prisma.js";
+import { ensureRepo } from "../infra/repoService.js";
 import { runPlaywright } from "../infra/runnerService.js";
+import {
+  assertNoProjectVariableValues,
+  assertPreservesVariablePlaceholders,
+  redactProjectVariableValues,
+  type ScriptRepairResult,
+} from "../prompts/scriptRepair.js";
+import { formatScriptRepairProgress, repairScriptWithAgent } from "./scriptRepairAgentService.js";
+import { getRunArtifactEvidence } from "../utils/artifactService.js";
 import { shouldGenerateScript } from "../utils/testCaseScriptGeneration.js";
+import { extractRepairVideoFrames, removeRepairWorkspace } from "../utils/videoFrameService.js";
 import {
   ACTIVE_STATUSES,
   SUBMITTABLE_STATUSES,
@@ -19,6 +29,7 @@ type SharedRunningStatus = "queued" | "generating" | "running" | "success" | "fa
 
 type ProjectConfig = {
   baseUrl: string;
+  repoUrl: string | null;
   promptHint: string | null;
   variables: ProjectVariable[];
 };
@@ -41,21 +52,44 @@ type RunTargetTestCase = {
 
 type RunTask = {
   runLogId: number;
+  kind: "execution" | "repair";
   testCase: RunTargetTestCase;
   // 提交时的项目配置快照，生成和执行都以此为准，避免 worker 反复查库。
   baseUrl: string;
   projectInstructions: string | null;
-  generationLogLines?: string[];
+  logWriter?: {
+    lines: string[];
+    pending: Promise<void>;
+  };
 };
 
-type GenerationItem = {
+type ScriptGenerationItem = {
+  kind: "generation";
   task: RunTask;
   source: ScriptSource;
 };
 
+type RepairItem = {
+  kind: "repair";
+  task: RunTask;
+  project: ProjectConfig;
+  sourceRunLog: {
+    id: number;
+    failureReason: string | null;
+    stdout: string | null;
+    stderr: string | null;
+  };
+  sourceEditedAt: Date;
+  groupName: string;
+};
+
+type GenerationItem = ScriptGenerationItem | RepairItem;
+
 type StopTarget = {
   runLogId: number;
   testCaseId: string;
+  kind: RunTask["kind"];
+  logs?: string;
 };
 
 type StopRunResult = {
@@ -70,6 +104,7 @@ type GenerationControl = {
 
 type PlaywrightControl = {
   controller: AbortController;
+  task: RunTask;
 };
 
 // 全局共享池：所有提交的用例（不分批次）进这两个队列，常驻 worker 消费。
@@ -79,7 +114,8 @@ const readyQueue = new AsyncQueue<RunTask>();
 const activeGenerationRuns = new Map<number, GenerationControl>();
 const activePlaywrightRuns = new Map<number, PlaywrightControl>();
 
-const GENERATION_LOG_HEADER = "[用例生成日志]";
+const EXECUTION_LOG_HEADER = "[用例运行日志]";
+const REPAIR_LOG_HEADER = "[AI 修复日志]";
 
 // Playwright 执行并发度；浏览器进程较重，默认 3，可用 MAX_PLAYWRIGHT_CONCURRENCY 按机器内存调整。
 const PLAYWRIGHT_CONCURRENCY = resolvePlaywrightConcurrency();
@@ -112,6 +148,96 @@ export function startRunWorkers() {
 export async function runTestCase(testCaseId: string) {
   logRun("收到单用例运行请求", { testCaseId });
   return runTestCases([testCaseId]);
+}
+
+// 手动提交一次 AI 修复；修复依据始终是当前用例最近一次失败记录。
+export async function repairTestCase(testCaseId: string) {
+  const testCase = await prisma.testCase.findUnique({
+    where: { id: testCaseId },
+    select: {
+      id: true,
+      title: true,
+      projectId: true,
+      naturalLanguage: true,
+      status: true,
+      playwrightScript: true,
+      scriptNeedsGeneration: true,
+      scriptGeneratedAt: true,
+      editedAt: true,
+      group: { select: { name: true } },
+      runLogs: {
+        where: { kind: "execution", status: "failed" },
+        orderBy: { startedAt: "desc" },
+        take: 1,
+        select: { id: true, failureReason: true, stdout: true, stderr: true },
+      },
+      repairCandidates: {
+        where: { kind: "repair", status: "pending" },
+        take: 1,
+        select: { id: true },
+      },
+    },
+  });
+
+  if (!testCase) throw new Error("用例不存在");
+  if (testCase.status !== "failed") throw new Error("只有当前状态为失败的用例才能进行 AI 修复");
+  if (testCase.scriptNeedsGeneration || !testCase.playwrightScript?.trim()) {
+    throw new Error("当前用例没有可修复的 Playwright 脚本，请先运行并生成脚本");
+  }
+  if (!testCase.runLogs[0]) throw new Error("未找到可用于诊断的失败记录");
+  if (testCase.repairCandidates.length) throw new Error("该用例已有待审核的修复候选，请先处理候选");
+
+  const project = await getProject(testCase.projectId);
+  const initialLogs = createRunLog("repair", `修复任务已创建，失败来源 #${testCase.runLogs[0].id}`);
+  const repairLog = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.testCase.updateMany({
+      where: { id: testCase.id, status: "failed" },
+      data: { status: "queued" },
+    });
+    if (claimed.count !== 1) {
+      throw new Error("用例状态已变化，请刷新后重试");
+    }
+
+    return tx.runLog.create({
+      data: {
+        testCaseId: testCase.id,
+        kind: "repair",
+        status: "queued",
+        logs: initialLogs,
+        sourceRunLogId: testCase.runLogs[0].id,
+      },
+      select: { id: true },
+    });
+  });
+
+  const task: RunTask = {
+    runLogId: repairLog.id,
+    kind: "repair",
+    testCase: {
+      id: testCase.id,
+      title: testCase.title,
+      projectId: testCase.projectId,
+      naturalLanguage: testCase.naturalLanguage,
+      status: testCase.status,
+      playwrightScript: testCase.playwrightScript,
+      scriptNeedsGeneration: testCase.scriptNeedsGeneration,
+      scriptGeneratedAt: testCase.scriptGeneratedAt,
+    },
+    baseUrl: project.baseUrl,
+    projectInstructions: project.promptHint,
+    logWriter: { lines: initialLogs.split("\n"), pending: Promise.resolve() },
+  };
+
+  generationQueue.enqueue({
+    kind: "repair",
+    task,
+    project,
+    sourceRunLog: testCase.runLogs[0],
+    sourceEditedAt: testCase.editedAt,
+    groupName: testCase.group.name,
+  });
+  logRun("AI 修复任务已入队", { testCaseId, repairLogId: repairLog.id });
+  return { repairLogId: repairLog.id };
 }
 
 // 批量创建运行日志并启动后台执行流程。
@@ -168,26 +294,27 @@ function dispatchTasks(tasks: RunTask[], project: ProjectConfig) {
         playwrightScript: testCase.playwrightScript,
       })
     ) {
-      appendGenerationLog(task, "本次复用已有 Playwright 脚本，未进入 agent 生成");
+      void appendRunLog(task, "本次复用已有 Playwright 脚本，未进入 AI 生成");
       logRun("复用已有脚本，直接执行", { runLogId: task.runLogId, testCaseId: testCase.id });
       readyQueue.enqueue(task);
       continue;
     }
 
     try {
-      appendGenerationLog(task, "开始解析自然语言用例变量");
+      void appendRunLog(task, "开始解析自然语言用例变量");
       // 变量替换只影响传给 agent 的内容，不回写自然语言用例原文。
       const resolvedNaturalLanguage = resolveVariables(testCase.naturalLanguage, project.variables);
-      appendGenerationLog(task, "变量解析完成，等待进入 agent 生成");
+      void appendRunLog(task, "变量解析完成，等待进入 AI 生成");
       generationQueue.enqueue({
+        kind: "generation",
         task,
         source: { id: testCase.id, title: testCase.title, naturalLanguage: resolvedNaturalLanguage },
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "变量解析失败";
-      appendGenerationLog(task, `变量解析失败：${message}`);
+      void appendRunLog(task, `变量解析失败：${message}`);
       logRun("变量解析失败", { runLogId: task.runLogId, testCaseId: testCase.id, message });
-      void markFinished(task.runLogId, testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message });
+      void finishTask(task, "failed", { stdout: "", stderr: "", failureReason: message });
     }
   }
 }
@@ -214,6 +341,7 @@ export async function stopTestCaseRun(testCaseId: string): Promise<StopRunResult
     select: {
       id: true,
       testCaseId: true,
+      kind: true,
     },
   });
 
@@ -225,7 +353,7 @@ export async function stopTestCaseRun(testCaseId: string): Promise<StopRunResult
   const generationControl = activeGenerationRuns.get(activeRunLog.id);
   if (generationControl) {
     generationControl.controller.abort(new Error(USER_STOP_FAILURE_REASON));
-    const targets = generationControl.tasks.map(toStopTarget);
+    const targets = await createStoppedTargets(generationControl.tasks);
     await markRunsStopped(targets);
     logRun("已停止 Claude 生成", {
       testCaseId,
@@ -240,7 +368,10 @@ export async function stopTestCaseRun(testCaseId: string): Promise<StopRunResult
   }
 
   const removedTasks = removeQueuedTasks(activeRunLog.id);
-  const targets = removedTasks.length ? removedTasks.map(toStopTarget) : [{ runLogId: activeRunLog.id, testCaseId }];
+  const stoppedTasks = playwrightControl ? [playwrightControl.task, ...removedTasks] : removedTasks;
+  const targets = stoppedTasks.length
+    ? await createStoppedTargets(stoppedTasks)
+    : [{ runLogId: activeRunLog.id, testCaseId, kind: activeRunLog.kind }];
   await markRunsStopped(targets);
   logRun("已停止用例运行", {
     testCaseId,
@@ -296,12 +427,14 @@ async function createQueuedRunTasks(
       const runLog = await tx.runLog.create({
         data: {
           testCaseId: testCase.id,
+          kind: "execution",
           status: "queued",
+          logs: EXECUTION_LOG_HEADER,
           startedAt: now,
         },
       });
 
-      tasks.push({ runLogId: runLog.id, testCase, baseUrl, projectInstructions });
+      tasks.push({ runLogId: runLog.id, kind: "execution", testCase, baseUrl, projectInstructions });
       logRun("创建运行日志并设置排队中", {
         runLogId: runLog.id,
         testCaseId: testCase.id,
@@ -316,13 +449,16 @@ async function createQueuedRunTasks(
 
 // 生成 worker：每个 worker 绑定独立 playwright-cli session（gen-{i}），并发互不踩浏览器。
 async function drainGenerationLoop(workerIndex: number) {
-  const sessionId = `gen-${workerIndex}`;
   while (true) {
     const next = await generationQueue.next();
     if (next.done) {
       return;
     }
-    await generateSingleScript(next.value, sessionId);
+    if (next.value.kind === "repair") {
+      await repairSingleTestCase(next.value, `repair-${workerIndex}`);
+    } else {
+      await generateSingleScript(next.value, `gen-${workerIndex}`);
+    }
   }
 }
 
@@ -338,7 +474,7 @@ async function drainReadyLoop() {
 }
 
 // 生成单个用例的脚本：独立一次 SDK 调用、独立 abort 控制，失败只影响这一条。
-async function generateSingleScript(item: GenerationItem, sessionId: string) {
+async function generateSingleScript(item: ScriptGenerationItem, sessionId: string) {
   const { task, source } = item;
   const transitioned = await updateStatus(task.runLogId, task.testCase.id, "generating");
   if (!transitioned) {
@@ -346,22 +482,22 @@ async function generateSingleScript(item: GenerationItem, sessionId: string) {
   }
 
   const control = registerGenerationControl([task]);
-  appendGenerationLog(task, "进入 agent 生成");
+  void appendRunLog(task, "进入 AI 脚本生成");
   logRun("开始调用 agent 生成用例", { runLogId: task.runLogId, testCaseId: source.id, sessionId });
 
   try {
     await generateScript(source, task.baseUrl, {
       signal: control.controller.signal,
       stopReason: USER_STOP_FAILURE_REASON,
-      onProgress: (message) => appendGenerationLog(task, message),
+      onProgress: (message) => appendRunLog(task, message),
       projectInstructions: task.projectInstructions,
       sessionId,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Claude 生成用例失败";
-    appendGenerationLog(task, `agent 生成失败：${message}`);
+    void appendRunLog(task, `AI 脚本生成失败：${message}`);
     logRun("agent 生成用例失败", { runLogId: task.runLogId, testCaseId: source.id, message });
-    await markFinished(task.runLogId, task.testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message });
+    await finishTask(task, "failed", { stdout: "", stderr: "", failureReason: message });
     return;
   } finally {
     unregisterGenerationControl(control);
@@ -372,18 +508,308 @@ async function generateSingleScript(item: GenerationItem, sessionId: string) {
   }
 }
 
+async function repairSingleTestCase(item: RepairItem, sessionId: string) {
+  const { task, project, sourceRunLog } = item;
+  const transitioned = await updateStatus(task.runLogId, task.testCase.id, "generating");
+  if (!transitioned) return;
+
+  const control = registerGenerationControl([task]);
+  const originalScript = task.testCase.playwrightScript!;
+  const specPath = path.resolve(process.cwd(), "tests", "generated", `${task.testCase.id}.spec.ts`);
+  const candidateSpecPath = path.resolve(
+    process.cwd(),
+    "tests",
+    "generated",
+    `${task.testCase.id}.repair-${task.runLogId}.spec.ts`,
+  );
+  let lastProgress = "";
+
+  try {
+    await writeFile(candidateSpecPath, originalScript, "utf8");
+    await appendRunLog(task, "开始收集最近一次失败记录和 Playwright 产物");
+    const evidence = await getRunArtifactEvidence(task.testCase.id, sourceRunLog.id);
+    const videoPaths = evidence.artifacts.filter((artifact) => artifact.type === "video").map((artifact) => artifact.filePath);
+
+    let videoFramePaths: string[] = [];
+    if (videoPaths.length) {
+      await appendRunLog(task, "正在提取失败录屏关键帧");
+      try {
+        videoFramePaths = await extractRepairVideoFrames(task.runLogId, videoPaths);
+        await appendRunLog(task, `录屏关键帧提取完成，共 ${videoFramePaths.length} 张`);
+      } catch (error) {
+        await appendRunLog(task, `录屏无法解析，将使用其他失败证据：${toErrorMessage(error)}`);
+      }
+    } else {
+      await appendRunLog(task, "本次失败没有可用录屏，将使用日志、报告、代码和真实页面诊断");
+    }
+
+    let repositoryPath: string | null = null;
+    if (project.repoUrl) {
+      await appendRunLog(task, "正在同步业务代码仓库");
+      try {
+        repositoryPath = await ensureRepo(project.repoUrl, task.testCase.projectId);
+        await appendRunLog(task, "业务代码仓库同步完成");
+      } catch (error) {
+        await appendRunLog(task, `业务代码仓库不可用，将使用其他证据：${toErrorMessage(error)}`);
+      }
+    } else {
+      await appendRunLog(task, "项目未配置业务代码仓库，将使用其他证据诊断");
+    }
+
+    const resolvedNaturalLanguage = resolveVariables(task.testCase.naturalLanguage, project.variables);
+    await appendRunLog(task, "失败证据准备完成，进入 AI 根因分析");
+    const repairResult = await repairScriptWithAgent({
+      baseUrl: task.baseUrl,
+      targetFile: path.relative(process.cwd(), candidateSpecPath).replaceAll(path.sep, "/"),
+      businessRepository: repositoryPath,
+      projectInstructions: task.projectInstructions,
+      testCase: {
+        id: task.testCase.id,
+        title: task.testCase.title,
+        originalNaturalLanguage: task.testCase.naturalLanguage,
+        resolvedNaturalLanguage,
+      },
+      currentScript: originalScript,
+      sourceFailure: {
+        runLogId: sourceRunLog.id,
+        failureReason: sourceRunLog.failureReason,
+        stdout: truncateEvidence(sourceRunLog.stdout),
+        stderr: truncateEvidence(sourceRunLog.stderr),
+        artifactPaths: [
+          ...(evidence.reportPath ? [evidence.reportPath] : []),
+          ...evidence.artifacts
+            .filter((artifact) => artifact.type !== "video" && artifact.filePath !== evidence.reportPath)
+            .map((artifact) => artifact.filePath),
+        ].slice(0, 50),
+        videoFramePaths,
+      },
+    }, {
+      signal: control.controller.signal,
+      stopReason: USER_STOP_FAILURE_REASON,
+      sessionId,
+      repairLogId: task.runLogId,
+      onProgress: async (message) => {
+        const progress = formatScriptRepairProgress(message);
+        if (progress && progress !== lastProgress) {
+          lastProgress = progress;
+          await appendRunLog(task, progress);
+        }
+      },
+    });
+
+    await handleRepairResult(item, repairResult, specPath, candidateSpecPath, control.controller.signal);
+  } catch (error) {
+    const message = redactProjectVariableValues(toErrorMessage(error), project.variables);
+    await appendRunLog(task, `AI 修复失败：${truncateLogMessage(message)}`);
+    await finishTask(task, "failed", { stdout: "", stderr: "", failureReason: message });
+  } finally {
+    unregisterGenerationControl(control);
+    await Promise.all([
+      removeRepairWorkspace(task.runLogId),
+      rm(path.resolve(process.cwd(), "test-results", task.testCase.id, `repair-${task.runLogId}-agent`), {
+        recursive: true,
+        force: true,
+      }),
+      rm(candidateSpecPath, { force: true }),
+    ]).catch((error) => {
+      logRun("清理 AI 修复临时文件失败", { repairLogId: task.runLogId, message: toErrorMessage(error) });
+    });
+  }
+}
+
+async function handleRepairResult(
+  item: RepairItem,
+  result: ScriptRepairResult,
+  specPath: string,
+  candidateSpecPath: string,
+  signal: AbortSignal,
+) {
+  const { task, project } = item;
+  if (result.outcome === "case_repair") {
+    assertNoProjectVariableValues(result.naturalLanguage, project.variables);
+    assertPreservesVariablePlaceholders(task.testCase.naturalLanguage, result.naturalLanguage);
+    if (result.naturalLanguage.trim() === task.testCase.naturalLanguage.trim()) {
+      throw new Error("AI 返回的自然语言修复候选与原用例相同");
+    }
+    const problem = redactProjectVariableValues(result.problem, project.variables);
+    const suggestion = redactProjectVariableValues(result.suggestion, project.variables);
+    await appendRunLog(task, "AI 判断自然语言用例需要修复，正在创建待审核候选");
+    await completeCaseRepairCandidate(item, {
+      naturalLanguage: result.naturalLanguage.trim(),
+      problem,
+      suggestion,
+    });
+    return;
+  }
+
+  if (result.outcome === "unrepairable") {
+    const problem = redactProjectVariableValues(result.problem, project.variables);
+    const suggestion = redactProjectVariableValues(result.suggestion, project.variables);
+    const message = `无法安全修复（${toRepairCategoryText(result.category)}）\n问题：${problem}\n处理建议：${suggestion}`;
+    await appendRunLog(task, message);
+    await finishTask(task, "failed", { stdout: "", stderr: "", failureReason: message });
+    return;
+  }
+
+  const candidateScript = await readFile(candidateSpecPath, "utf8");
+  if (!candidateScript.trim() || candidateScript === task.testCase.playwrightScript) {
+    throw new Error("AI 未产生有效的候选脚本修改");
+  }
+
+  const summary = redactProjectVariableValues(result.summary, project.variables);
+  await appendRunLog(task, `AI 已生成候选脚本：${summary}`);
+  if (!(await updateStatus(task.runLogId, task.testCase.id, "running"))) {
+    return;
+  }
+
+  await appendRunLog(task, "开始平台独立 Playwright 验证");
+  const validation = await runPlaywright(candidateScript, task.baseUrl, task.testCase.id, task.runLogId, {
+    signal,
+    stopReason: USER_STOP_FAILURE_REASON,
+    specPath: candidateSpecPath,
+  });
+  if (!validation.success) {
+    const failureReason = validation.failureReason ?? "候选脚本验证失败";
+    await appendRunLog(task, `候选脚本验证失败，已保留原脚本：${truncateLogMessage(failureReason)}`);
+    await finishTask(task, "failed", {
+      stdout: validation.stdout,
+      stderr: validation.stderr,
+      failureReason,
+    });
+    return;
+  }
+
+  await appendRunLog(task, "候选脚本独立验证通过，正在保存修复结果");
+  const saved = await completeScriptRepair(
+    task,
+    item.sourceEditedAt,
+    candidateScript,
+    validation.stdout,
+    validation.stderr,
+  );
+  if (saved) {
+    await writeFile(specPath, candidateScript, "utf8").catch((error) => {
+      logRun("数据库已保存修复脚本，但同步生成文件失败", {
+        repairLogId: task.runLogId,
+        testCaseId: task.testCase.id,
+        message: toErrorMessage(error),
+      });
+    });
+  }
+}
+
+async function completeScriptRepair(
+  task: RunTask,
+  sourceEditedAt: Date,
+  script: string,
+  stdout: string,
+  stderr: string,
+) {
+  await appendRunLog(task, "AI 脚本修复完成");
+  await flushRunLog(task);
+  const finishedAt = new Date();
+  return prisma.$transaction(async (tx) => {
+    const runLog = await tx.runLog.updateMany({
+      where: { id: task.runLogId, testCaseId: task.testCase.id, status: { in: ACTIVE_STATUSES }, finishedAt: null },
+      data: {
+        status: "success",
+        logs: getRunLog(task),
+        stdout,
+        stderr,
+        failureReason: null,
+        finishedAt,
+      },
+    });
+    if (runLog.count !== 1) return false;
+
+    const testCase = await tx.testCase.updateMany({
+      where: { id: task.testCase.id, editedAt: sourceEditedAt, status: { in: ACTIVE_STATUSES } },
+      data: {
+        playwrightScript: script,
+        scriptNeedsGeneration: false,
+        scriptGeneratedAt: finishedAt,
+        status: "success",
+        lastFailureReason: null,
+        lastRunAt: finishedAt,
+      },
+    });
+    if (testCase.count !== 1) throw new Error("用例状态已变化，未保存候选脚本");
+    return true;
+  });
+}
+
+async function completeCaseRepairCandidate(
+  item: RepairItem,
+  candidate: { naturalLanguage: string; problem: string; suggestion: string },
+) {
+  const { task } = item;
+  await appendRunLog(task, "自然语言修复候选已生成，等待人工审核");
+  await flushRunLog(task);
+  const finishedAt = new Date();
+  await prisma.$transaction(async (tx) => {
+    const runLog = await tx.runLog.updateMany({
+      where: { id: task.runLogId, testCaseId: task.testCase.id, status: { in: ACTIVE_STATUSES }, finishedAt: null },
+      data: { status: "success", logs: getRunLog(task), failureReason: null, finishedAt },
+    });
+    if (runLog.count !== 1) return;
+
+    await tx.testCaseCandidate.create({
+      data: {
+        projectId: task.testCase.projectId,
+        kind: "repair",
+        generationId: null,
+        repairRunLogId: task.runLogId,
+        targetTestCaseId: task.testCase.id,
+        title: task.testCase.title,
+        groupName: item.groupName,
+        naturalLanguage: candidate.naturalLanguage,
+        sourceNaturalLanguage: task.testCase.naturalLanguage,
+        sourceEditedAt: item.sourceEditedAt,
+        repairProblem: candidate.problem,
+        repairSuggestion: candidate.suggestion,
+      },
+    });
+    const testCase = await tx.testCase.updateMany({
+      where: { id: task.testCase.id, status: { in: ACTIVE_STATUSES } },
+      data: {
+        status: "failed",
+        lastFailureReason: item.sourceRunLog.failureReason,
+      },
+    });
+    if (testCase.count !== 1) throw new Error("用例状态已变化，未创建修复候选");
+  });
+}
+
+function truncateEvidence(value: string | null, maxLength = 20_000) {
+  if (!value || value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)}\n...[输出已截断]`;
+}
+
+function toRepairCategoryText(category: "business" | "data" | "permission" | "environment") {
+  return {
+    business: "业务逻辑问题",
+    data: "测试数据问题",
+    permission: "权限问题",
+    environment: "环境问题",
+  }[category];
+}
+
+function toErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "未知错误";
+}
+
 async function executeTaskWithIsolation(task: RunTask) {
   try {
     await executeTask(task);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Playwright 执行异常";
-    appendGenerationLog(task, `用例执行异常：${message}`);
+    void appendRunLog(task, `用例执行异常：${message}`);
     logRun("用例执行异常", {
       runLogId: task.runLogId,
       testCaseId: task.testCase.id,
       message,
     });
-    await markFinished(task.runLogId, task.testCase.id, "failed", { stdout: getGenerationLog(task), stderr: "", failureReason: message });
+    await finishTask(task, "failed", { stdout: "", stderr: "", failureReason: message });
   }
 }
 
@@ -405,7 +831,7 @@ async function executeTask(task: RunTask) {
 
   // 变量解析或 agent 生成阶段已经失败的用例，不再进入 Playwright 执行。
   if (latestTestCase.status === "failed" || !latestTestCase.playwrightScript) {
-    appendGenerationLog(task, "跳过 Playwright 执行：脚本生成阶段已失败或脚本为空");
+    void appendRunLog(task, "跳过 Playwright 执行：脚本生成阶段已失败或脚本为空");
     logRun("跳过 Playwright 执行", {
       runLogId: task.runLogId,
       testCaseId: latestTestCase.id,
@@ -418,7 +844,7 @@ async function executeTask(task: RunTask) {
   const script = latestTestCase.playwrightScript;
   const switchedToRunning = await updateStatus(task.runLogId, latestTestCase.id, "running");
   if (!switchedToRunning) {
-    appendGenerationLog(task, "运行日志已结束，跳过 Playwright 执行");
+    void appendRunLog(task, "运行日志已结束，跳过 Playwright 执行");
     logRun("用例已停止，跳过 Playwright 执行", {
       runLogId: task.runLogId,
       testCaseId: latestTestCase.id,
@@ -430,7 +856,7 @@ async function executeTask(task: RunTask) {
   const playwrightControl = registerPlaywrightControl(task);
   let result;
   try {
-    result = await runPlaywright(script, task.baseUrl, latestTestCase.id, {
+    result = await runPlaywright(script, task.baseUrl, latestTestCase.id, task.runLogId, {
       signal: playwrightControl.controller.signal,
       stopReason: USER_STOP_FAILURE_REASON,
     });
@@ -439,23 +865,23 @@ async function executeTask(task: RunTask) {
   }
 
   if (result.success) {
-    appendGenerationLog(task, "Playwright 执行成功");
+    void appendRunLog(task, "Playwright 执行成功");
     logRun("用例执行成功", {
       runLogId: task.runLogId,
       testCaseId: latestTestCase.id,
     });
-    await markFinished(task.runLogId, latestTestCase.id, "success", { stdout: getGenerationLog(task), stderr: result.stderr });
+    await finishTask(task, "success", { stdout: result.stdout, stderr: result.stderr });
     return;
   }
 
-  appendGenerationLog(task, `Playwright 执行失败：${truncateLogMessage(result.failureReason ?? "未知错误")}`);
+  void appendRunLog(task, `Playwright 执行失败：${truncateLogMessage(result.failureReason ?? "未知错误")}`);
   logRun("用例执行失败", {
     runLogId: task.runLogId,
     testCaseId: latestTestCase.id,
     failureReason: result.failureReason,
   });
-  await markFinished(task.runLogId, latestTestCase.id, "failed", {
-    stdout: getGenerationLog(task),
+  await finishTask(task, "failed", {
+    stdout: result.stdout,
     stderr: result.stderr,
     failureReason: result.failureReason,
   });
@@ -501,7 +927,7 @@ async function saveGeneratedScript(task: RunTask) {
     });
 
     if (!saved) {
-      appendGenerationLog(task, "用例已停止，跳过保存 agent 脚本");
+      void appendRunLog(task, "用例已停止，跳过保存 AI 脚本");
       logRun("用例已停止，跳过保存 agent 脚本", {
         runLogId: task.runLogId,
         testCaseId: task.testCase.id,
@@ -509,7 +935,7 @@ async function saveGeneratedScript(task: RunTask) {
       return false;
     }
 
-    appendGenerationLog(task, `保存 agent 生成脚本成功：${path.relative(process.cwd(), specPath).replaceAll(path.sep, "/")}`);
+    void appendRunLog(task, `保存 AI 生成脚本成功：${path.relative(process.cwd(), specPath).replaceAll(path.sep, "/")}`);
     logRun("保存 agent 生成脚本", {
       runLogId: task.runLogId,
       testCaseId: task.testCase.id,
@@ -518,14 +944,14 @@ async function saveGeneratedScript(task: RunTask) {
     });
     return true;
   } catch {
-    appendGenerationLog(task, `agent 未生成目标 spec 文件：${task.testCase.id}.spec.ts`);
+    void appendRunLog(task, `AI 未生成目标 spec 文件：${task.testCase.id}.spec.ts`);
     logRun("agent 未生成目标 spec 文件", {
       runLogId: task.runLogId,
       testCaseId: task.testCase.id,
       specPath,
     });
-    await markFinished(task.runLogId, task.testCase.id, "failed", {
-      stdout: getGenerationLog(task),
+    await finishTask(task, "failed", {
+      stdout: "",
       stderr: "",
       failureReason: `Agent 未生成用例文件: ${task.testCase.id}.spec.ts`,
     });
@@ -647,12 +1073,32 @@ async function updateStatus(runLogId: number, testCaseId: string, status: Shared
   });
 }
 
-// 标记一次运行结束，并写入输出和失败原因。
+type FinishOutput = {
+  logs: string;
+  stdout: string;
+  stderr: string;
+  failureReason?: string;
+};
+
+async function finishTask(
+  task: RunTask,
+  status: "success" | "failed",
+  output: Omit<FinishOutput, "logs">,
+) {
+  await flushRunLog(task);
+  return markFinished(task.runLogId, task.testCase.id, task.kind, status, {
+    ...output,
+    logs: getRunLog(task),
+  });
+}
+
+// 标记一次运行结束，并写入过程日志、原始输出和失败原因。
 async function markFinished(
   runLogId: number,
   testCaseId: string,
+  kind: RunTask["kind"],
   status: "success" | "failed",
-  { stdout, stderr, failureReason }: { stdout: string; stderr: string; failureReason?: string },
+  { logs, stdout, stderr, failureReason }: FinishOutput,
 ) {
   const finishedAt = new Date();
   logRun("标记运行结束", {
@@ -673,6 +1119,7 @@ async function markFinished(
       },
       data: {
         status,
+        logs,
         stdout,
         stderr,
         failureReason,
@@ -692,7 +1139,7 @@ async function markFinished(
       },
       data: {
         status,
-        lastRunAt: finishedAt,
+        lastRunAt: kind === "execution" ? finishedAt : undefined,
         lastFailureReason: status === "failed" ? failureReason ?? stderr : null,
       },
     });
@@ -724,6 +1171,7 @@ function unregisterGenerationControl(control: GenerationControl) {
 function registerPlaywrightControl(task: RunTask) {
   const control: PlaywrightControl = {
     controller: new AbortController(),
+    task,
   };
 
   activePlaywrightRuns.set(task.runLogId, control);
@@ -744,9 +1192,20 @@ function removeQueuedTasks(runLogId: number) {
 }
 
 async function markRunsStopped(targets: StopTarget[]) {
+  const uniqueTargets = dedupeStopTargets(targets);
+  const existingLogs = await prisma.runLog.findMany({
+    where: { id: { in: uniqueTargets.map((target) => target.runLogId) } },
+    select: { id: true, logs: true },
+  });
+  const logsById = new Map(existingLogs.map((runLog) => [runLog.id, runLog.logs]));
   await Promise.all(
-    dedupeStopTargets(targets).map((target) =>
-      markFinished(target.runLogId, target.testCaseId, "failed", { stdout: createGenerationLog(USER_STOP_FAILURE_REASON), stderr: "", failureReason: USER_STOP_FAILURE_REASON }),
+    uniqueTargets.map((target) =>
+      markFinished(target.runLogId, target.testCaseId, target.kind, "failed", {
+        logs: target.logs ?? appendTerminalLog(logsById.get(target.runLogId), target.kind, USER_STOP_FAILURE_REASON),
+        stdout: "",
+        stderr: "",
+        failureReason: USER_STOP_FAILURE_REASON,
+      }),
     ),
   );
 }
@@ -767,7 +1226,18 @@ function toStopTarget(task: RunTask): StopTarget {
   return {
     runLogId: task.runLogId,
     testCaseId: task.testCase.id,
+    kind: task.kind,
   };
+}
+
+async function createStoppedTargets(tasks: RunTask[]) {
+  const uniqueTasks = Array.from(new Map(tasks.map((task) => [task.runLogId, task])).values());
+  await Promise.all(uniqueTasks.map((task) => appendRunLog(task, USER_STOP_FAILURE_REASON)));
+  return uniqueTasks.map((task) => ({ ...toStopTarget(task), logs: getRunLog(task) }));
+}
+
+function appendTerminalLog(logs: string | null | undefined, kind: RunTask["kind"], message: string) {
+  return `${logs || getLogHeader(kind)}\n${formatLogTime(new Date())} ${message}`;
 }
 
 function toStopRunResult(targets: StopTarget[]): StopRunResult {
@@ -777,21 +1247,39 @@ function toStopRunResult(targets: StopTarget[]): StopRunResult {
   };
 }
 
-function appendGenerationLog(task: RunTask, message: string) {
-  task.generationLogLines ??= [GENERATION_LOG_HEADER];
-  task.generationLogLines.push(`${formatLogTime(new Date())} ${message}`);
-  void persistGenerationLog(task);
+function appendRunLog(task: RunTask, message: string) {
+  const writer = getLogWriter(task);
+  writer.lines.push(`${formatLogTime(new Date())} ${message}`);
+  const snapshot = writer.lines.join("\n");
+  writer.pending = writer.pending.then(() => persistRunLog(task, snapshot));
+  return writer.pending;
 }
 
-function getGenerationLog(task: RunTask) {
-  return (task.generationLogLines ?? [GENERATION_LOG_HEADER, `${formatLogTime(new Date())} 暂无用例生成日志`]).join("\n");
+function getRunLog(task: RunTask) {
+  return getLogWriter(task).lines.join("\n");
 }
 
-function createGenerationLog(message: string) {
-  return [GENERATION_LOG_HEADER, `${formatLogTime(new Date())} ${message}`].join("\n");
+function createRunLog(kind: RunTask["kind"], message: string) {
+  return [getLogHeader(kind), `${formatLogTime(new Date())} ${message}`].join("\n");
 }
 
-async function persistGenerationLog(task: RunTask) {
+function getLogWriter(task: RunTask) {
+  task.logWriter ??= {
+    lines: [getLogHeader(task.kind)],
+    pending: Promise.resolve(),
+  };
+  return task.logWriter;
+}
+
+function getLogHeader(kind: RunTask["kind"]) {
+  return kind === "repair" ? REPAIR_LOG_HEADER : EXECUTION_LOG_HEADER;
+}
+
+function flushRunLog(task: RunTask) {
+  return getLogWriter(task).pending;
+}
+
+async function persistRunLog(task: RunTask, logs: string) {
   try {
     await prisma.runLog.updateMany({
       where: {
@@ -801,11 +1289,11 @@ async function persistGenerationLog(task: RunTask) {
         finishedAt: null,
       },
       data: {
-        stdout: getGenerationLog(task),
+        logs,
       },
     });
   } catch (error) {
-    logRun("实时写入用例生成日志失败", {
+    logRun("实时写入用例过程日志失败", {
       runLogId: task.runLogId,
       testCaseId: task.testCase.id,
       message: error instanceof Error ? error.message : "未知错误",

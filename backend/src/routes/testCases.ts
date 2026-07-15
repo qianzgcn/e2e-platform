@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "../infra/prisma.js";
-import { getLatestArtifacts } from "../utils/artifactService.js";
-import { removePlaywrightTestResults } from "../utils/cleanupService.js";
+import { assertNoProjectVariableValues, assertPreservesVariablePlaceholders } from "../prompts/scriptRepair.js";
+import { getRunArtifacts } from "../utils/artifactService.js";
+import { removeGeneratedTestScript, removeTestCaseArtifacts } from "../utils/cleanupService.js";
 import { resolveScriptGenerationOnSave } from "../utils/testCaseScriptGeneration.js";
 import { startCaseGeneration } from "../services/caseGenerationJobService.js";
-import { runAllTestCases, runTestCase, runTestCases, stopTestCaseRun } from "../services/testCaseRunService.js";
+import { repairTestCase, runAllTestCases, runTestCase, runTestCases, stopTestCaseRun } from "../services/testCaseRunService.js";
 
 export const testCasesRouter = Router();
 
@@ -23,6 +24,8 @@ type TestCaseListRow = {
   lastRunAt: Date | null;
   createdAt: Date;
   editedAt: Date;
+  repairCandidates: Array<{ id: number }>;
+  runLogs: Array<{ kind: "execution" | "repair" }>;
 };
 
 type ExistingTestCaseForUpdate = {
@@ -74,6 +77,17 @@ testCasesRouter.get("/", async (req, res) => {
       lastRunAt: true,
       createdAt: true,
       editedAt: true,
+      repairCandidates: {
+        where: { kind: "repair", status: "pending" },
+        take: 1,
+        select: { id: true },
+      },
+      runLogs: {
+        where: { status: { in: ["queued", "generating", "running"] }, finishedAt: null },
+        orderBy: { startedAt: "desc" },
+        take: 1,
+        select: { kind: true },
+      },
     },
   });
 
@@ -90,6 +104,8 @@ testCasesRouter.get("/", async (req, res) => {
       lastRunAt: testCase.lastRunAt,
       createdAt: testCase.createdAt,
       editedAt: testCase.editedAt,
+      pendingRepairCandidateId: testCase.repairCandidates[0]?.id ?? null,
+      activeRunKind: testCase.runLogs[0]?.kind ?? null,
     })),
   );
 });
@@ -104,8 +120,19 @@ testCasesRouter.get("/candidates", async (req, res) => {
   const candidates = await prisma.testCaseCandidate.findMany({
     where: { projectId, status: "pending" },
     orderBy: { id: "asc" },
+    include: { targetTestCase: { select: { editedAt: true } } },
   });
-  res.json({ candidates });
+  res.json({
+    candidates: candidates.map(({ targetTestCase, ...candidate }) => ({
+      ...candidate,
+      stale: Boolean(
+        candidate.kind === "repair"
+        && candidate.sourceEditedAt
+        && targetTestCase
+        && candidate.sourceEditedAt.getTime() !== targetTestCase.editedAt.getTime()
+      ),
+    })),
+  });
 });
 
 // 按项目查看最近的 AI 用例生成记录；日志详情通过 /generations/:id 按需加载。
@@ -140,6 +167,60 @@ testCasesRouter.get("/generations", async (req, res) => {
   });
 });
 
+testCasesRouter.get("/:id/logs", async (req, res) => {
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
+  const where = { testCaseId: req.params.id };
+  const [total, logs] = await Promise.all([
+    prisma.runLog.count({ where }),
+    prisma.runLog.findMany({
+      where,
+      orderBy: { startedAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        testCaseId: true,
+        kind: true,
+        status: true,
+        sourceRunLogId: true,
+        startedAt: true,
+        finishedAt: true,
+        repairCandidate: { select: { id: true, status: true } },
+      },
+    }),
+  ]);
+  res.json({ logs, total, page, pageSize });
+});
+
+testCasesRouter.get("/:id/logs/:logId", async (req, res) => {
+  const logId = Number(req.params.logId);
+  if (!Number.isInteger(logId)) {
+    res.status(400).json({ message: "日志 ID 无效" });
+    return;
+  }
+  const runLog = await prisma.runLog.findFirst({
+    where: { id: logId, testCaseId: req.params.id },
+    include: {
+      repairCandidate: {
+        select: {
+          id: true,
+          status: true,
+          naturalLanguage: true,
+          sourceNaturalLanguage: true,
+          repairProblem: true,
+          repairSuggestion: true,
+        },
+      },
+    },
+  });
+  if (!runLog) {
+    res.status(404).json({ message: "用例日志不存在" });
+    return;
+  }
+  res.json({ runLog, ...(await getRunArtifacts(req.params.id, runLog.id)) });
+});
+
 testCasesRouter.get("/:id", async (req, res) => {
   const id = req.params.id;
   const testCase = await prisma.testCase.findUnique({
@@ -170,13 +251,11 @@ testCasesRouter.get("/:id", async (req, res) => {
 
 testCasesRouter.get("/:id/latest-run", async (req, res) => {
   const id = req.params.id;
-  const [runLog, artifacts] = await Promise.all([
-    prisma.runLog.findFirst({
-      where: { testCaseId: id },
-      orderBy: { startedAt: "desc" },
-    }),
-    getLatestArtifacts(id),
-  ]);
+  const runLog = await prisma.runLog.findFirst({
+    where: { testCaseId: id },
+    orderBy: { startedAt: "desc" },
+  });
+  const artifacts = runLog ? await getRunArtifacts(id, runLog.id) : { artifacts: [] };
 
   res.json({
     runLog,
@@ -277,15 +356,16 @@ testCasesRouter.put("/:id", async (req, res) => {
       include: { group: true },
     });
 
-    if (scriptGeneration.clearRunHistory) {
-      await tx.runLog.deleteMany({ where: { testCaseId: id } });
-    }
-
     return updatedTestCase;
   });
 
-  if (scriptGeneration.clearRunHistory) {
-    await removePlaywrightTestResults(id);
+  if (scriptGeneration.clearScript) {
+    await removeGeneratedTestScript(id).catch((error) => {
+      console.error("[testCases] 清理已失效脚本失败", {
+        testCaseId: id,
+        message: error instanceof Error ? error.message : "未知错误",
+      });
+    });
   }
 
   res.json({
@@ -296,7 +376,22 @@ testCasesRouter.put("/:id", async (req, res) => {
 
 testCasesRouter.delete("/:id", async (req, res) => {
   const ids = parseIds(req.params.id);
-  await prisma.testCase.deleteMany({ where: { id: { in: ids } } });
+  const existing = await prisma.testCase.findMany({
+    where: { id: { in: ids } },
+    select: { id: true },
+  });
+  await prisma.testCase.deleteMany({ where: { id: { in: existing.map((testCase) => testCase.id) } } });
+  const cleanupResults = await Promise.allSettled(
+    existing.flatMap((testCase) => [
+      removeGeneratedTestScript(testCase.id),
+      removeTestCaseArtifacts(testCase.id),
+    ]),
+  );
+  for (const result of cleanupResults) {
+    if (result.status === "rejected") {
+      console.error("[testCases] 删除用例文件失败", result.reason);
+    }
+  }
   res.status(204).send();
 });
 
@@ -331,6 +426,14 @@ testCasesRouter.post("/generate", async (req, res) => {
   }
 });
 
+testCasesRouter.post("/:id/repair", async (req, res) => {
+  try {
+    res.status(202).json(await repairTestCase(req.params.id));
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "AI 修复提交失败" });
+  }
+});
+
 // 导入选中候选为 TestCase。
 testCasesRouter.post("/candidates/import", async (req, res) => {
   const input = Array.isArray(req.body.candidates)
@@ -343,7 +446,9 @@ testCasesRouter.post("/candidates/import", async (req, res) => {
   }
   try {
     const ids = valid.map((row) => row.id);
-    const existing = await prisma.testCaseCandidate.findMany({ where: { id: { in: ids }, status: "pending" } });
+    const existing = await prisma.testCaseCandidate.findMany({
+      where: { id: { in: ids }, kind: "generated", status: "pending" },
+    });
     if (!existing.length) {
       res.json({ createdCount: 0, skippedCount: 0 });
       return;
@@ -352,11 +457,102 @@ testCasesRouter.post("/candidates/import", async (req, res) => {
     const projectId = existing[0].projectId;
     const rows = valid.filter((row) => existingIds.has(row.id));
     const { createdIds, skippedRows } = await createTestCasesFromRows(projectId, rows);
-    await prisma.testCaseCandidate.updateMany({ where: { id: { in: ids } }, data: { status: "imported" } });
+    await prisma.testCaseCandidate.updateMany({
+      where: { id: { in: existing.map((candidate) => candidate.id) }, kind: "generated", status: "pending" },
+      data: { status: "imported" },
+    });
     res.json({ createdCount: createdIds.length, skippedCount: skippedRows.length });
   } catch (error) {
     res.status(400).json({ message: error instanceof Error ? error.message : "导入失败" });
   }
+});
+
+testCasesRouter.post("/candidates/:id/apply-repair", async (req, res) => {
+  const id = Number(req.params.id);
+  const naturalLanguage = typeof req.body.naturalLanguage === "string" ? req.body.naturalLanguage.trim() : "";
+  if (!Number.isInteger(id) || !naturalLanguage) {
+    res.status(400).json({ message: "修复候选和测试步骤必填" });
+    return;
+  }
+
+  try {
+    const candidate = await prisma.testCaseCandidate.findUnique({
+      where: { id },
+      include: {
+        targetTestCase: { select: { id: true, editedAt: true } },
+        project: { select: { variables: { select: { name: true, value: true } } } },
+      },
+    });
+    if (
+      !candidate
+      || candidate.kind !== "repair"
+      || candidate.status !== "pending"
+      || !candidate.targetTestCase
+      || !candidate.sourceEditedAt
+    ) {
+      res.status(404).json({ message: "待审核的修复候选不存在" });
+      return;
+    }
+
+    assertNoProjectVariableValues(naturalLanguage, candidate.project.variables);
+    assertPreservesVariablePlaceholders(candidate.sourceNaturalLanguage ?? "", naturalLanguage);
+    const target = candidate.targetTestCase;
+    const sourceEditedAt = candidate.sourceEditedAt;
+    const updated = await prisma.$transaction(async (tx) => {
+      const testCase = await tx.testCase.updateMany({
+        where: { id: target.id, editedAt: sourceEditedAt },
+        data: {
+          naturalLanguage,
+          playwrightScript: null,
+          scriptNeedsGeneration: true,
+          scriptGeneratedAt: null,
+          status: "not_run",
+          lastFailureReason: null,
+          lastRunAt: null,
+          editedAt: new Date(),
+        },
+      });
+      if (testCase.count !== 1) return false;
+
+      const applied = await tx.testCaseCandidate.updateMany({
+        where: { id: candidate.id, kind: "repair", status: "pending" },
+        data: { naturalLanguage, status: "imported" },
+      });
+      if (applied.count !== 1) throw new Error("修复候选状态已变化");
+      return true;
+    });
+    if (!updated) {
+      res.status(409).json({ message: "原用例已被修改，该修复候选已过期，请重新发起 AI 修复" });
+      return;
+    }
+
+    await removeGeneratedTestScript(target.id).catch((error) => {
+      console.error("[testCases] 清理已失效脚本失败", {
+        testCaseId: target.id,
+        message: error instanceof Error ? error.message : "未知错误",
+      });
+    });
+    res.json({ updated: true, testCaseId: target.id });
+  } catch (error) {
+    res.status(400).json({ message: error instanceof Error ? error.message : "采纳修复候选失败" });
+  }
+});
+
+testCasesRouter.post("/candidates/:id/reject", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ message: "候选 ID 无效" });
+    return;
+  }
+  const result = await prisma.testCaseCandidate.updateMany({
+    where: { id, kind: "repair", status: "pending" },
+    data: { status: "rejected" },
+  });
+  if (result.count !== 1) {
+    res.status(404).json({ message: "待审核的修复候选不存在" });
+    return;
+  }
+  res.json({ rejected: true });
 });
 
 // 查看某次生成的日志。

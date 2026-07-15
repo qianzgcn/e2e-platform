@@ -23,30 +23,35 @@ enum RunLogStatus {
   failed
 }
 
+enum RunLogKind {
+  execution
+  repair
+}
+
 model Project {
-  id         Int      @id @default(autoincrement())
-  name       String   @unique
-  baseUrl    String
-  repoUrl    String?
-  promptHint String?  @db.Text
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  variables  ProjectVariable[]
-  groups     TestCaseGroup[]
-  testCases  TestCase[]
+  id          Int                  @id @default(autoincrement())
+  name        String               @unique
+  baseUrl     String
+  repoUrl     String?
+  promptHint  String?              @db.Text
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  variables   ProjectVariable[]
+  groups      TestCaseGroup[]
+  testCases   TestCase[]
   generations TestCaseGeneration[]
   candidates  TestCaseCandidate[]
 }
 
 model ProjectVariable {
-  id        Int      @id @default(autoincrement())
-  projectId Int
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  name      String
-  value     String   @db.Text
-  description String? @db.Text
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          Int      @id @default(autoincrement())
+  projectId   Int
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  value       String   @db.Text
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@unique([projectId, name])
   @@index([projectId])
@@ -66,45 +71,59 @@ model TestCaseGroup {
 }
 
 model TestCase {
-  id                String         @id
-  title             String
-  groupId           Int
-  group             TestCaseGroup  @relation(fields: [groupId], references: [id])
-  projectId         Int
-  project           Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  naturalLanguage   String         @db.Text
-  playwrightScript  String?        @db.LongText
-  scriptNeedsGeneration Boolean    @default(true)
-  status            TestCaseStatus @default(not_run)
-  lastFailureReason String?        @db.Text
-  lastRunAt         DateTime?
-  scriptGeneratedAt DateTime?
-  createdAt         DateTime       @default(now())
-  editedAt          DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-  runLogs           RunLog[]
+  id                    String              @id @db.VarChar(191)
+  title                 String
+  groupId               Int
+  group                 TestCaseGroup       @relation(fields: [groupId], references: [id])
+  projectId             Int
+  project               Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  naturalLanguage       String              @db.Text
+  playwrightScript      String?             @db.LongText
+  scriptNeedsGeneration Boolean             @default(true)
+  status                TestCaseStatus      @default(not_run)
+  lastFailureReason     String?             @db.Text
+  lastRunAt             DateTime?
+  scriptGeneratedAt     DateTime?
+  createdAt             DateTime            @default(now())
+  editedAt              DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  runLogs               RunLog[]
+  repairCandidates      TestCaseCandidate[] @relation("RepairTarget")
 
   @@index([groupId])
   @@index([projectId])
 }
 
 model RunLog {
-  id            Int          @id @default(autoincrement())
-  testCaseId    String
-  testCase      TestCase     @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
-  status        RunLogStatus
-  failureReason String?      @db.Text
-  stdout        String?      @db.LongText
-  stderr        String?      @db.LongText
-  startedAt     DateTime     @default(now())
-  finishedAt    DateTime?
+  id              Int                @id @default(autoincrement())
+  testCaseId      String             @db.VarChar(191)
+  testCase        TestCase           @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
+  kind            RunLogKind         @default(execution)
+  status          RunLogStatus
+  failureReason   String?            @db.Text
+  logs            String?            @db.LongText
+  stdout          String?            @db.LongText
+  stderr          String?            @db.LongText
+  sourceRunLogId  Int?
+  sourceRunLog    RunLog?            @relation("RepairSource", fields: [sourceRunLogId], references: [id], onDelete: SetNull)
+  repairLogs      RunLog[]           @relation("RepairSource")
+  repairCandidate TestCaseCandidate? @relation("RepairCandidate")
+  startedAt       DateTime           @default(now())
+  finishedAt      DateTime?
 
   @@index([testCaseId])
+  @@index([sourceRunLogId])
 }
 
 enum CandidateStatus {
   pending
   imported
+  rejected
+}
+
+enum CandidateKind {
+  generated
+  repair
 }
 
 enum TestCaseGenerationStatus {
@@ -122,24 +141,34 @@ model TestCaseGeneration {
   hint          String?                  @db.Text
   failureReason String?                  @db.Text
   candidates    TestCaseCandidate[]
-  createdAt     DateTime                  @default(now())
+  createdAt     DateTime                 @default(now())
   finishedAt    DateTime?
 
   @@index([projectId])
 }
 
 model TestCaseCandidate {
-  id              Int              @id @default(autoincrement())
-  projectId       Int
-  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  generationId    Int
-  generation      TestCaseGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
-  title           String
-  groupName       String
-  naturalLanguage String           @db.Text
-  status          CandidateStatus  @default(pending)
-  createdAt       DateTime         @default(now())
+  id                    Int                 @id @default(autoincrement())
+  projectId             Int
+  project               Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind                  CandidateKind       @default(generated)
+  generationId          Int?
+  generation            TestCaseGeneration? @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  repairRunLogId        Int?                @unique
+  repairRunLog          RunLog?             @relation("RepairCandidate", fields: [repairRunLogId], references: [id], onDelete: SetNull)
+  targetTestCaseId      String?             @db.VarChar(191)
+  targetTestCase        TestCase?           @relation("RepairTarget", fields: [targetTestCaseId], references: [id], onDelete: Cascade)
+  title                 String
+  groupName             String
+  naturalLanguage       String              @db.Text
+  sourceNaturalLanguage String?             @db.Text
+  sourceEditedAt        DateTime?
+  repairProblem         String?             @db.Text
+  repairSuggestion      String?             @db.Text
+  status                CandidateStatus     @default(pending)
+  createdAt             DateTime            @default(now())
 
   @@index([projectId])
   @@index([generationId])
+  @@index([targetTestCaseId])
 }

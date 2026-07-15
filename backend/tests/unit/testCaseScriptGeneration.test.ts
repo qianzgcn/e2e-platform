@@ -13,7 +13,7 @@ test("shouldGenerateScript only enters agent when marked or script is empty", ()
   assert.equal(shouldGenerateScript({ scriptNeedsGeneration: false, playwrightScript: null }), true);
 });
 
-test("resolveScriptGenerationOnSave invalidates current run artifacts whenever generation is required", () => {
+test("resolveScriptGenerationOnSave invalidates only the current script and run state", () => {
   assert.deepEqual(
     resolveScriptGenerationOnSave(
       {
@@ -30,7 +30,6 @@ test("resolveScriptGenerationOnSave invalidates current run artifacts whenever g
       scriptNeedsGeneration: true,
       resetRunState: true,
       clearScript: true,
-      clearRunHistory: true,
     },
   );
 
@@ -50,7 +49,6 @@ test("resolveScriptGenerationOnSave invalidates current run artifacts whenever g
       scriptNeedsGeneration: true,
       resetRunState: true,
       clearScript: true,
-      clearRunHistory: true,
     },
   );
 
@@ -70,7 +68,6 @@ test("resolveScriptGenerationOnSave invalidates current run artifacts whenever g
       scriptNeedsGeneration: false,
       resetRunState: false,
       clearScript: false,
-      clearRunHistory: false,
     },
   );
 
@@ -90,7 +87,6 @@ test("resolveScriptGenerationOnSave invalidates current run artifacts whenever g
       scriptNeedsGeneration: true,
       resetRunState: true,
       clearScript: false,
-      clearRunHistory: true,
     },
   );
 });

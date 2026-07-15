@@ -6,4 +6,5 @@ test-results
 tests/generated
 artifacts
 .playwright-cli
+.repair-work
 .repos

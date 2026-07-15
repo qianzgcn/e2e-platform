@@ -1,11 +1,28 @@
-import { ReloadOutlined } from "@ant-design/icons";
-import { Button, Descriptions, Empty, Modal, Tabs, Typography, message } from "antd";
+import { ReloadOutlined, VerticalAlignBottomOutlined } from "@ant-design/icons";
+import {
+  Alert,
+  Button,
+  Descriptions,
+  Empty,
+  Modal,
+  Pagination,
+  Space,
+  Spin,
+  Tabs,
+  Tag,
+  Typography,
+  message,
+} from "antd";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchLatestRun } from "../api/testCases";
+import { useNavigate } from "react-router-dom";
+import { fetchTestCaseLogDetail, fetchTestCaseLogs } from "../api/testCases";
 import { toBackendUrl } from "../api/url";
-import type { LatestRunDetail } from "../types";
+import type { RunLogStatus, RunLogSummary, TestCaseLogDetail } from "../types";
 import { formatDateTime } from "../utils/date";
 import { StatusTag } from "./StatusTag";
+
+const ACTIVE_STATUSES: RunLogStatus[] = ["queued", "generating", "running"];
+const PAGE_SIZE = 20;
 
 export type RunLogTarget = {
   id: string;
@@ -15,158 +32,315 @@ export type RunLogTarget = {
 
 type RunLogModalProps = {
   target: RunLogTarget | null;
+  focusLogId?: number | null;
   onClose: () => void;
+  onStatusChange?: () => void;
 };
 
-export function RunLogModal({ target, onClose }: RunLogModalProps) {
-  const [detail, setDetail] = useState<LatestRunDetail | null>(null);
-  const [loading, setLoading] = useState(false);
+export function RunLogModal({ target, focusLogId, onClose, onStatusChange }: RunLogModalProps) {
+  const navigate = useNavigate();
+  const [history, setHistory] = useState<RunLogSummary[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [selectedLogId, setSelectedLogId] = useState<number | null>(null);
+  const [detail, setDetail] = useState<TestCaseLogDetail | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const requestIdRef = useRef(0);
   const [messageApi, contextHolder] = message.useMessage();
 
-  const loadRunLog = useCallback(
-    async (testCaseId: string) => {
-      const requestId = requestIdRef.current + 1;
-      requestIdRef.current = requestId;
-      setLoading(true);
-      try {
-        const nextDetail = await fetchLatestRun(testCaseId);
-        if (requestId === requestIdRef.current) {
-          setDetail(nextDetail);
-        }
-      } catch (error) {
-        if (requestId === requestIdRef.current) {
-          messageApi.error(error instanceof Error ? error.message : "加载运行日志失败");
-        }
-      } finally {
-        if (requestId === requestIdRef.current) {
-          setLoading(false);
-        }
+  const loadHistory = useCallback(async (testCaseId: string, page: number, preferredLogId?: number | null) => {
+    setHistoryLoading(true);
+    try {
+      const result = await fetchTestCaseLogs(testCaseId, page, PAGE_SIZE);
+      setHistory(result.logs);
+      setHistoryTotal(result.total);
+      setHistoryPage(result.page);
+      setSelectedLogId((current) => {
+        if (preferredLogId && result.logs.some((item) => item.id === preferredLogId)) return preferredLogId;
+        if (current && result.logs.some((item) => item.id === current)) return current;
+        return result.logs[0]?.id ?? null;
+      });
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "加载日志历史失败");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [messageApi]);
+
+  const loadDetail = useCallback(async (testCaseId: string, logId: number, showLoading = true) => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    if (showLoading) setDetailLoading(true);
+    try {
+      const nextDetail = await fetchTestCaseLogDetail(testCaseId, logId);
+      if (requestId === requestIdRef.current) setDetail(nextDetail);
+      return nextDetail;
+    } catch (error) {
+      if (requestId === requestIdRef.current) {
+        messageApi.error(error instanceof Error ? error.message : "加载日志详情失败");
       }
-    },
-    [messageApi],
-  );
+      return null;
+    } finally {
+      if (showLoading && requestId === requestIdRef.current) setDetailLoading(false);
+    }
+  }, [messageApi]);
 
   useEffect(() => {
     if (!target) {
       requestIdRef.current += 1;
+      setHistory([]);
       setDetail(null);
-      setLoading(false);
+      setSelectedLogId(null);
+      setHistoryPage(1);
       setActiveTab("overview");
       return;
     }
-
     setDetail(null);
-    setActiveTab("overview");
-    void loadRunLog(target.id);
-  }, [loadRunLog, target]);
+    setSelectedLogId(null);
+    void loadHistory(target.id, 1, focusLogId);
+  }, [focusLogId, loadHistory, target]);
+
+  useEffect(() => {
+    if (!target || selectedLogId == null) return;
+    setDetail(null);
+    void loadDetail(target.id, selectedLogId).then((nextDetail) => {
+      if (nextDetail && ACTIVE_STATUSES.includes(nextDetail.runLog.status)) setActiveTab("process");
+    });
+  }, [loadDetail, selectedLogId, target]);
+
+  useEffect(() => {
+    if (!target || selectedLogId == null || !detail || !ACTIVE_STATUSES.includes(detail.runLog.status)) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      const nextDetail = await loadDetail(target.id, selectedLogId, false);
+      if (cancelled || !nextDetail) return;
+      if (ACTIVE_STATUSES.includes(nextDetail.runLog.status)) {
+        timer = setTimeout(poll, 1500);
+      } else {
+        await loadHistory(target.id, historyPage, selectedLogId);
+        onStatusChange?.();
+      }
+    };
+    timer = setTimeout(poll, 1500);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [detail?.runLog.status, historyPage, loadDetail, loadHistory, onStatusChange, selectedLogId, target]);
 
   function handleClose() {
     requestIdRef.current += 1;
     onClose();
-    setDetail(null);
-    setLoading(false);
-    setActiveTab("overview");
   }
+
+  const candidate = detail?.runLog.repairCandidate;
 
   return (
     <>
       {contextHolder}
       <Modal
-        title={
-          <div className="flex items-center justify-between gap-3 pr-8">
-            <span>运行日志</span>
-            <Button
-              size="small"
-              icon={<ReloadOutlined />}
-              loading={loading}
-              disabled={!target}
-              onClick={() => target && void loadRunLog(target.id)}
-            >
-              刷新
-            </Button>
-          </div>
-        }
+        title="用例日志"
         open={Boolean(target)}
         onCancel={handleClose}
         footer={null}
-        width={1040}
+        width={1240}
       >
-        {loading ? (
-          <Typography.Text type="secondary">加载中...</Typography.Text>
-        ) : target && detail?.runLog ? (
-          <Tabs
-            activeKey={activeTab}
-            onChange={setActiveTab}
-            items={[
-              {
-                key: "overview",
-                label: "概览",
-                children: (
-                  <Descriptions column={1} size="small">
-                    <Descriptions.Item label="用例名称">{target.title}</Descriptions.Item>
-                    <Descriptions.Item label="分组">{target.groupName || "暂无"}</Descriptions.Item>
-                    <Descriptions.Item label="状态">
-                      <StatusTag status={detail.runLog.status} />
-                    </Descriptions.Item>
-                    <Descriptions.Item label="开始时间">{formatDateTime(detail.runLog.startedAt)}</Descriptions.Item>
-                    <Descriptions.Item label="结束时间">{formatDateTime(detail.runLog.finishedAt)}</Descriptions.Item>
-                    {detail.runLog.failureReason ? (
-                      <Descriptions.Item label="失败原因">
-                        <Typography.Paragraph className="!mb-0" copyable>
-                          {detail.runLog.failureReason}
-                        </Typography.Paragraph>
-                      </Descriptions.Item>
-                    ) : null}
-                  </Descriptions>
-                ),
-              },
-              {
-                key: "output",
-                label: "用例生成日志",
-                children: (
-                  <LogBlock
-                    title="用例生成日志"
-                    value={getGenerationLog(detail.runLog.stdout)}
-                    emptyText="该运行暂无用例生成日志"
-                  />
-                ),
-              },
-              {
-                key: "report",
-                label: "测试报告",
-                children: detail.reportUrl ? (
-                  <iframe
-                    title="Playwright HTML 报告"
-                    src={toBackendUrl(detail.reportUrl)}
-                    className="h-[560px] w-full rounded border border-gray-200"
-                  />
-                ) : (
-                  <Empty description="暂无测试报告" />
-                ),
-              },
-            ]}
-          />
-        ) : (
-          <Empty description="暂无运行日志" />
-        )}
+        {target ? (
+          <div className="grid min-h-[620px] grid-cols-[300px_minmax(0,1fr)] gap-4">
+            <div className="border-r border-gray-200 pr-4">
+              <div className="mb-3 flex items-center justify-between">
+                <Typography.Text strong>历史记录</Typography.Text>
+                <Button
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  loading={historyLoading}
+                  onClick={() => void loadHistory(target.id, historyPage, selectedLogId)}
+                />
+              </div>
+              <Spin spinning={historyLoading}>
+                {history.length ? (
+                  <div className="space-y-1">
+                    {history.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        aria-pressed={selectedLogId === item.id}
+                        className={`w-full border-0 bg-transparent px-2 py-3 text-left ${selectedLogId === item.id ? "rounded bg-blue-50" : ""}`}
+                        onClick={() => setSelectedLogId(item.id)}
+                      >
+                    <div className="w-full">
+                      <div className="flex items-center justify-between gap-2">
+                        <Tag color={item.kind === "repair" ? "purple" : "blue"}>
+                          {item.kind === "repair" ? "AI 修复" : "用例运行"}
+                        </Tag>
+                        <StatusTag status={item.status} kind={item.kind} />
+                      </div>
+                      <Typography.Text className="mt-1 block text-xs" type="secondary">
+                        #{item.id} · {formatDateTime(item.startedAt)}
+                      </Typography.Text>
+                      {item.repairCandidate ? (
+                        <Tag className="mt-1" color={candidateStatusColor(item.repairCandidate.status)}>
+                          {candidateStatusText(item.repairCandidate.status)}
+                        </Tag>
+                      ) : null}
+                    </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无日志" />}
+              </Spin>
+              {historyTotal > PAGE_SIZE ? (
+                <Pagination
+                  className="mt-3"
+                  simple
+                  current={historyPage}
+                  pageSize={PAGE_SIZE}
+                  total={historyTotal}
+                  onChange={(page) => target && void loadHistory(target.id, page)}
+                />
+              ) : null}
+            </div>
+
+            <Spin spinning={detailLoading}>
+              {detail ? (
+                <Tabs
+                  activeKey={activeTab}
+                  onChange={setActiveTab}
+                  items={[
+                    {
+                      key: "overview",
+                      label: "概览",
+                      children: (
+                        <Space orientation="vertical" size="middle" className="w-full">
+                          <Descriptions column={1} size="small">
+                            <Descriptions.Item label="用例名称">{target.title}</Descriptions.Item>
+                            <Descriptions.Item label="分组">{target.groupName || "暂无"}</Descriptions.Item>
+                            <Descriptions.Item label="记录类型">
+                              {detail.runLog.kind === "repair" ? "AI 修复" : "用例运行"}
+                            </Descriptions.Item>
+                            <Descriptions.Item label="状态">
+                              <StatusTag status={detail.runLog.status} kind={detail.runLog.kind} />
+                            </Descriptions.Item>
+                            <Descriptions.Item label="开始时间">{formatDateTime(detail.runLog.startedAt)}</Descriptions.Item>
+                            <Descriptions.Item label="结束时间">{formatDateTime(detail.runLog.finishedAt)}</Descriptions.Item>
+                            {detail.runLog.sourceRunLogId ? (
+                              <Descriptions.Item label="失败来源">运行记录 #{detail.runLog.sourceRunLogId}</Descriptions.Item>
+                            ) : null}
+                          </Descriptions>
+                          {detail.runLog.failureReason ? (
+                            <Alert type="error" showIcon title="失败原因" description={detail.runLog.failureReason} />
+                          ) : null}
+                          {candidate ? (
+                            <Alert
+                              type={candidate.status === "pending" ? "warning" : "success"}
+                              showIcon
+                              title={`自然语言修复候选：${candidateStatusText(candidate.status)}`}
+                              description={candidate.repairSuggestion || candidate.repairProblem}
+                              action={candidate.status === "pending" ? (
+                                <Button size="small" onClick={() => navigate(`/generate-cases?candidateId=${candidate.id}`)}>
+                                  前往审核
+                                </Button>
+                              ) : undefined}
+                            />
+                          ) : null}
+                        </Space>
+                      ),
+                    },
+                    {
+                      key: "process",
+                      label: "过程日志",
+                      children: <FollowLogBlock key={detail.runLog.id} value={detail.runLog.logs} />,
+                    },
+                    {
+                      key: "output",
+                      label: "原始输出",
+                      children: (
+                        <Space orientation="vertical" size="middle" className="w-full">
+                          <LogBlock title="stdout" value={detail.runLog.stdout} />
+                          <LogBlock title="stderr" value={detail.runLog.stderr} />
+                        </Space>
+                      ),
+                    },
+                    {
+                      key: "report",
+                      label: "测试报告",
+                      children: detail.reportUrl ? (
+                        <iframe
+                          title="Playwright HTML 报告"
+                          src={toBackendUrl(detail.reportUrl)}
+                          className="h-[540px] w-full rounded border border-gray-200"
+                        />
+                      ) : <Empty description="暂无测试报告" />,
+                    },
+                  ]}
+                />
+              ) : <Empty description="请选择一条日志" />}
+            </Spin>
+          </div>
+        ) : null}
       </Modal>
     </>
   );
 }
 
-function LogBlock({ title, value, emptyText = "暂无输出" }: { title: string; value?: string | null; emptyText?: string }) {
+function FollowLogBlock({ value }: { value?: string | null }) {
+  const containerRef = useRef<HTMLPreElement>(null);
+  const [following, setFollowing] = useState(true);
+
+  useEffect(() => {
+    if (!following || !containerRef.current) return;
+    requestAnimationFrame(() => {
+      if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    });
+  }, [following, value]);
+
+  function scrollToLatest() {
+    setFollowing(true);
+    requestAnimationFrame(() => {
+      if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    });
+  }
+
   return (
-    <div>
+    <div className="relative">
+      <pre
+        ref={containerRef}
+        className="h-[520px] overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-4 text-xs text-slate-100"
+        aria-live="polite"
+        onScroll={(event) => {
+          const element = event.currentTarget;
+          setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < 48);
+        }}
+      >
+        {value || "暂无过程日志"}
+      </pre>
+      {!following ? (
+        <Button className="!absolute bottom-4 right-4" icon={<VerticalAlignBottomOutlined />} onClick={scrollToLatest}>
+          回到最新
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function LogBlock({ title, value }: { title: string; value?: string | null }) {
+  return (
+    <div className="w-full">
       <Typography.Text strong>{title}</Typography.Text>
-      <pre className="mt-2 max-h-64 overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-100">
-        {value || emptyText}
+      <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-3 text-xs text-slate-100">
+        {value || "暂无输出"}
       </pre>
     </div>
   );
 }
 
-function getGenerationLog(stdout?: string | null) {
-  return stdout?.startsWith("[用例生成日志]") ? stdout : null;
+function candidateStatusText(status: "pending" | "imported" | "rejected") {
+  return { pending: "待审核", imported: "已采纳", rejected: "已驳回" }[status];
+}
+
+function candidateStatusColor(status: "pending" | "imported" | "rejected") {
+  return { pending: "warning", imported: "success", rejected: "default" }[status];
 }

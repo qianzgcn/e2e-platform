@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-export type PromptFileName = "case-generation.system.md" | "script-generation.system.md";
+export type PromptFileName =
+  | "case-generation.system.md"
+  | "script-generation.system.md"
+  | "script-repair.system.md";
 
 // 提示词文件很小，每次生成时重新读取，开发环境修改后无需重启服务。
 export async function loadPrompt(fileName: PromptFileName): Promise<string> {

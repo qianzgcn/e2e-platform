@@ -1,11 +1,14 @@
 import { Alert, Button, Card, Input, Modal, Space, Table, Tag, Typography, message } from "antd";
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
+  applyRepairCandidate,
   fetchCandidates,
   fetchGenerationHistory,
   fetchGenerationLogs,
   generateTestCaseCandidates,
   importCandidates,
+  rejectRepairCandidate,
 } from "../api/testCases";
 import { useProject } from "../ProjectContext";
 import type {
@@ -35,7 +38,13 @@ export function GenerateCasesPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedGeneration, setSelectedGeneration] = useState<TestCaseGeneration | null>(null);
   const [loadingGenerationId, setLoadingGenerationId] = useState<number | null>(null);
+  const [reviewCandidate, setReviewCandidate] = useState<TestCaseCandidate | null>(null);
+  const [reviewNaturalLanguage, setReviewNaturalLanguage] = useState("");
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewRejecting, setReviewRejecting] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedCandidateId = Number(searchParams.get("candidateId"));
 
   const loadCandidates = useCallback(async () => {
     if (currentProjectId == null) {
@@ -46,7 +55,7 @@ export function GenerateCasesPage() {
     try {
       const { candidates: list } = await fetchCandidates(currentProjectId);
       setCandidates(list);
-      setSelectedIds(list.map((candidate) => candidate.id));
+      setSelectedIds(list.filter((candidate) => candidate.kind === "generated").map((candidate) => candidate.id));
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "加载候选失败");
     }
@@ -79,6 +88,19 @@ export function GenerateCasesPage() {
     setSelectedGeneration(null);
     void Promise.all([loadCandidates(), loadGenerationHistory(true)]);
   }, [loadCandidates, loadGenerationHistory]);
+
+  useEffect(() => {
+    if (!Number.isInteger(requestedCandidateId) || reviewCandidate) return;
+    const candidate = candidates.find((item) => item.id === requestedCandidateId && item.kind === "repair");
+    if (!candidate) return;
+    setReviewCandidate(candidate);
+    setReviewNaturalLanguage(candidate.naturalLanguage);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("candidateId");
+      return next;
+    }, { replace: true });
+  }, [candidates, requestedCandidateId, reviewCandidate, setSearchParams]);
 
   useEffect(() => {
     if (activeGenerationId == null || currentProjectId == null) {
@@ -157,7 +179,9 @@ export function GenerateCasesPage() {
     }
     setImporting(true);
     try {
-      const selected = candidates.filter((candidate) => selectedIds.includes(candidate.id));
+      const selected = candidates.filter(
+        (candidate) => candidate.kind === "generated" && selectedIds.includes(candidate.id),
+      );
       const result = await importCandidates(selected);
       messageApi.success(`已导入 ${result.createdCount} 条，跳过 ${result.skippedCount} 条`);
       await loadCandidates();
@@ -165,6 +189,41 @@ export function GenerateCasesPage() {
       messageApi.error(error instanceof Error ? error.message : "导入失败");
     } finally {
       setImporting(false);
+    }
+  }
+
+  function openRepairReview(candidate: TestCaseCandidate) {
+    setReviewCandidate(candidate);
+    setReviewNaturalLanguage(candidate.naturalLanguage);
+  }
+
+  async function handleApplyRepairCandidate() {
+    if (!reviewCandidate || !reviewNaturalLanguage.trim()) return;
+    setReviewSaving(true);
+    try {
+      await applyRepairCandidate(reviewCandidate.id, reviewNaturalLanguage.trim());
+      messageApi.success("修复候选已采纳，原用例已标记为待生成脚本");
+      setReviewCandidate(null);
+      await loadCandidates();
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "采纳修复候选失败");
+    } finally {
+      setReviewSaving(false);
+    }
+  }
+
+  async function handleRejectRepairCandidate() {
+    if (!reviewCandidate) return;
+    setReviewRejecting(true);
+    try {
+      await rejectRepairCandidate(reviewCandidate.id);
+      messageApi.success("修复候选已驳回，原用例未修改");
+      setReviewCandidate(null);
+      await loadCandidates();
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "驳回修复候选失败");
+    } finally {
+      setReviewRejecting(false);
     }
   }
 
@@ -227,14 +286,27 @@ export function GenerateCasesPage() {
           rowSelection={{
             selectedRowKeys: selectedIds,
             onChange: (keys) => setSelectedIds(keys.map(Number)),
+            getCheckboxProps: (record) => ({ disabled: record.kind === "repair" }),
           }}
           columns={[
+            {
+              title: "来源",
+              dataIndex: "kind",
+              width: 100,
+              render: (value: TestCaseCandidate["kind"]) => (
+                <Tag color={value === "repair" ? "purple" : "blue"}>
+                  {value === "repair" ? "AI 修复" : "AI 生成"}
+                </Tag>
+              ),
+            },
             {
               title: "标题",
               dataIndex: "title",
               width: 160,
               render: (value: string, record) => (
-                <Input value={value} onChange={(event) => updateCandidate(record.id, { title: event.target.value })} />
+                record.kind === "repair" ? value : (
+                  <Input value={value} onChange={(event) => updateCandidate(record.id, { title: event.target.value })} />
+                )
               ),
             },
             {
@@ -242,23 +314,94 @@ export function GenerateCasesPage() {
               dataIndex: "groupName",
               width: 120,
               render: (value: string, record) => (
-                <Input value={value} onChange={(event) => updateCandidate(record.id, { groupName: event.target.value })} />
+                record.kind === "repair" ? value : (
+                  <Input value={value} onChange={(event) => updateCandidate(record.id, { groupName: event.target.value })} />
+                )
               ),
             },
             {
               title: "自然语言步骤",
               dataIndex: "naturalLanguage",
               render: (value: string, record) => (
-                <Input.TextArea
-                  value={value}
-                  autoSize={{ minRows: 2 }}
-                  onChange={(event) => updateCandidate(record.id, { naturalLanguage: event.target.value })}
-                />
+                record.kind === "repair" ? (
+                  <Typography.Paragraph ellipsis={{ rows: 3 }} className="!mb-0 whitespace-pre-wrap">
+                    {value}
+                  </Typography.Paragraph>
+                ) : (
+                  <Input.TextArea
+                    value={value}
+                    autoSize={{ minRows: 2 }}
+                    onChange={(event) => updateCandidate(record.id, { naturalLanguage: event.target.value })}
+                  />
+                )
               ),
+            },
+            {
+              title: "操作",
+              width: 90,
+              render: (_, record) => record.kind === "repair" ? (
+                <Button type="link" onClick={() => openRepairReview(record)}>审核</Button>
+              ) : null,
             },
           ]}
         />
       </Card>
+
+      <Modal
+        title={`审核自然语言修复候选${reviewCandidate ? ` #${reviewCandidate.id}` : ""}`}
+        open={reviewCandidate !== null}
+        onCancel={() => setReviewCandidate(null)}
+        width={980}
+        footer={[
+          <Button key="reject" danger loading={reviewRejecting} onClick={() => void handleRejectRepairCandidate()}>
+            驳回
+          </Button>,
+          <Button
+            key="apply"
+            type="primary"
+            loading={reviewSaving}
+            disabled={Boolean(reviewCandidate?.stale) || !reviewNaturalLanguage.trim()}
+            onClick={() => void handleApplyRepairCandidate()}
+          >
+            采纳并更新原用例
+          </Button>,
+        ]}
+      >
+        {reviewCandidate ? (
+          <Space orientation="vertical" size="middle" className="w-full">
+            {reviewCandidate.stale ? (
+              <Alert type="warning" showIcon title="候选已过期" description="原用例在候选生成后已被修改，请驳回并重新发起 AI 修复。" />
+            ) : null}
+            <Alert
+              type="info"
+              showIcon
+              title="AI 修复说明"
+              description={(
+                <div className="space-y-1">
+                  <div>问题：{reviewCandidate.repairProblem || "未提供"}</div>
+                  <div>建议：{reviewCandidate.repairSuggestion || "未提供"}</div>
+                </div>
+              )}
+            />
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <Typography.Text strong>原测试步骤</Typography.Text>
+                <Input.TextArea className="mt-2" value={reviewCandidate.sourceNaturalLanguage || ""} readOnly autoSize={{ minRows: 12 }} />
+              </div>
+              <div>
+                <Typography.Text strong>建议测试步骤（可编辑）</Typography.Text>
+                <Input.TextArea
+                  className="mt-2"
+                  value={reviewNaturalLanguage}
+                  onChange={(event) => setReviewNaturalLanguage(event.target.value)}
+                  autoSize={{ minRows: 12 }}
+                />
+              </div>
+            </div>
+            <Typography.Text type="secondary">采纳后旧脚本会失效，用例不会自动运行。</Typography.Text>
+          </Space>
+        ) : null}
+      </Modal>
 
       <Card title="生成历史">
         <Table<TestCaseGenerationSummary>

@@ -4,7 +4,8 @@ import { defineConfig, devices } from "@playwright/test";
 import path from "node:path";
 
 const testCaseId = process.env.PLAYWRIGHT_TEST_CASE_ID || "latest";
-const testResultsDir = path.resolve("test-results", testCaseId);
+const runLogId = process.env.PLAYWRIGHT_RUN_LOG_ID || "latest";
+const testResultsDir = path.resolve("test-results", testCaseId, runLogId);
 const testArtifactsDir = path.join(testResultsDir, "artifacts");
 
 // 后端生成的自动化用例统一放在 tests/generated 目录。
@@ -36,7 +37,7 @@ export default defineConfig({
     // runner 会通过 PLAYWRIGHT_BASE_URL 注入项目配置里的 baseUrl。
     baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:5173",
 
-    // 成功和失败都保留视频回放，不再输出 trace 和截图。
+    // 每次运行都保留录屏，并由 Playwright HTML 报告统一展示。
     trace: "off",
     screenshot: "off",
     video: "on",

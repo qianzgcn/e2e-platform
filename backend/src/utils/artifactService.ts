@@ -9,25 +9,48 @@ export type ArtifactItem = {
   url: string;
 };
 
-// 获取指定用例最新一次运行的报告和附件。
-export async function getLatestArtifacts(testCaseId: string) {
-  // 运行产物不入库；接口每次都从该用例的最新 test-results 目录读取。
-  const rootDir = path.join(TEST_RESULTS_ROOT, testCaseId);
+export type ArtifactEvidenceItem = ArtifactItem & {
+  filePath: string;
+};
+
+// 获取指定运行批次的报告和附件。
+export async function getRunArtifacts(testCaseId: string, runLogId: number) {
+  const evidence = await getRunArtifactEvidence(testCaseId, runLogId);
+  return {
+    reportUrl: evidence.reportUrl,
+    artifacts: evidence.artifacts.map(({ filePath: _filePath, ...artifact }) => artifact),
+  };
+}
+
+// 修复服务使用绝对路径读取失败证据；API 返回值会在 getRunArtifacts 中移除本地路径。
+export async function getRunArtifactEvidence(testCaseId: string, runLogId: number) {
+  const rootDir = path.join(TEST_RESULTS_ROOT, testCaseId, String(runLogId));
   const reportPath = path.join(rootDir, "html-report", "index.html");
 
-  const [reportExists, artifacts] = await Promise.all([
+  const [reportExists, scannedArtifacts] = await Promise.all([
     exists(reportPath),
     scanArtifacts(rootDir, rootDir),
   ]);
 
   return {
     reportUrl: reportExists ? toArtifactUrl(reportPath) : undefined,
-    artifacts,
+    reportPath: reportExists ? reportPath : undefined,
+    artifacts: removeCopiedReportVideos(scannedArtifacts),
   };
 }
 
+// HTML reporter 会把原始失败视频复制到 html-report/data；有原始附件时只展示一份。
+function removeCopiedReportVideos(artifacts: ArtifactEvidenceItem[]) {
+  const hasOriginalVideo = artifacts.some(
+    (artifact) => artifact.type === "video" && !artifact.name.startsWith("html-report/"),
+  );
+  return hasOriginalVideo
+    ? artifacts.filter((artifact) => artifact.type !== "video" || !artifact.name.startsWith("html-report/"))
+    : artifacts;
+}
+
 // 递归扫描用例产物目录。
-async function scanArtifacts(rootDir: string, currentDir: string): Promise<ArtifactItem[]> {
+async function scanArtifacts(rootDir: string, currentDir: string): Promise<ArtifactEvidenceItem[]> {
   // 用例未运行过时目录不存在，前端展示“暂无运行日志”即可。
   if (!(await exists(currentDir))) {
     return [];
@@ -47,6 +70,7 @@ async function scanArtifacts(rootDir: string, currentDir: string): Promise<Artif
           name: path.relative(rootDir, fullPath).replaceAll(path.sep, "/"),
           type: getArtifactType(fullPath),
           url: toArtifactUrl(fullPath),
+          filePath: fullPath,
         },
       ];
     }),

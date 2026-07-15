@@ -13,6 +13,7 @@ const repeatableSqlFiles = [
   "add_candidates.sql",
   "add_generation_status.sql",
   "invalidate_legacy_failure_scripts.sql",
+  "add_repair_workflow.sql",
 ];
 
 function splitSqlStatements(sql: string): string[] {

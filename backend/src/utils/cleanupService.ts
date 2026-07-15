@@ -10,16 +10,18 @@ export async function cleanupPlaywrightCliWorkspace(cwd = process.cwd()) {
   await rm(workspacePath, { recursive: true, force: true });
 }
 
-// 清空并重建单个用例的 Playwright 运行产物目录。
-export async function resetPlaywrightTestResults(testCaseId: string, cwd = process.cwd()) {
-  const testResultsDir = path.resolve(cwd, TEST_RESULTS_DIR, testCaseId);
+// 清空并重建单次 Playwright 运行的产物目录。
+export async function resetPlaywrightTestResults(testCaseId: string, runLogId: number | string, cwd = process.cwd()) {
+  const testResultsDir = path.resolve(cwd, TEST_RESULTS_DIR, testCaseId, String(runLogId));
   await rm(testResultsDir, { recursive: true, force: true });
   await mkdir(testResultsDir, { recursive: true });
   return testResultsDir;
 }
 
-// 用例脚本失效时删除旧运行产物，避免旧报告继续代表当前用例。
-export async function removePlaywrightTestResults(testCaseId: string, cwd = process.cwd()) {
-  const testResultsDir = path.resolve(cwd, TEST_RESULTS_DIR, testCaseId);
-  await rm(testResultsDir, { recursive: true, force: true });
+export async function removeGeneratedTestScript(testCaseId: string, cwd = process.cwd()) {
+  await rm(path.resolve(cwd, "tests", "generated", `${testCaseId}.spec.ts`), { force: true });
+}
+
+export async function removeTestCaseArtifacts(testCaseId: string, cwd = process.cwd()) {
+  await rm(path.resolve(cwd, TEST_RESULTS_DIR, testCaseId), { recursive: true, force: true });
 }

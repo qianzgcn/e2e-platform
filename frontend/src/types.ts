@@ -2,6 +2,7 @@ export type TestCaseStatus = "not_run" | "queued" | "generating" | "running" | "
 export type ActiveTestCaseStatus = Extract<TestCaseStatus, "queued" | "generating" | "running">;
 
 export type RunLogStatus = "queued" | "generating" | "running" | "success" | "failed";
+export type RunLogKind = "execution" | "repair";
 
 export type TestCaseListItem = {
   id: string;
@@ -15,6 +16,8 @@ export type TestCaseListItem = {
   lastRunAt?: string | null;
   createdAt?: string | null;
   editedAt?: string | null;
+  activeRunKind?: RunLogKind | null;
+  pendingRepairCandidateId?: number | null;
 };
 
 export type TestCaseDetail = TestCaseListItem & {
@@ -39,11 +42,19 @@ export type TestCaseExcelRow = {
 export type TestCaseCandidate = {
   id: number;
   projectId: number;
-  generationId: number;
+  kind: "generated" | "repair";
+  generationId: number | null;
+  repairRunLogId: number | null;
+  targetTestCaseId: string | null;
   title: string;
   groupName: string;
   naturalLanguage: string;
-  status: "pending" | "imported";
+  sourceNaturalLanguage: string | null;
+  sourceEditedAt: string | null;
+  repairProblem: string | null;
+  repairSuggestion: string | null;
+  status: "pending" | "imported" | "rejected";
+  stale: boolean;
   createdAt: string;
 };
 
@@ -116,12 +127,32 @@ export type ProjectVariable = {
 export type RunLog = {
   id: number;
   testCaseId: string;
+  kind: RunLogKind;
   status: RunLogStatus;
   failureReason?: string | null;
+  logs?: string | null;
   stdout?: string | null;
   stderr?: string | null;
+  sourceRunLogId?: number | null;
   startedAt: string;
   finishedAt?: string | null;
+  repairCandidate?: RepairCandidateReference | null;
+};
+
+export type RepairCandidateReference = {
+  id: number;
+  status: "pending" | "imported" | "rejected";
+  naturalLanguage?: string;
+  sourceNaturalLanguage?: string | null;
+  repairProblem?: string | null;
+  repairSuggestion?: string | null;
+};
+
+export type RunLogSummary = Pick<
+  RunLog,
+  "id" | "testCaseId" | "kind" | "status" | "sourceRunLogId" | "startedAt" | "finishedAt"
+> & {
+  repairCandidate: Pick<RepairCandidateReference, "id" | "status"> | null;
 };
 
 export type RunArtifact = {
@@ -132,6 +163,19 @@ export type RunArtifact = {
 
 export type LatestRunDetail = {
   runLog?: RunLog | null;
+  reportUrl?: string;
+  artifacts: RunArtifact[];
+};
+
+export type TestCaseLogHistory = {
+  logs: RunLogSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type TestCaseLogDetail = {
+  runLog: RunLog;
   reportUrl?: string;
   artifacts: RunArtifact[];
 };

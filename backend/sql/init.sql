@@ -52,13 +52,18 @@ CREATE TABLE IF NOT EXISTS `TestCase` (
 CREATE TABLE IF NOT EXISTS `RunLog` (
   `id` INTEGER NOT NULL AUTO_INCREMENT,
   `testCaseId` VARCHAR(191) NOT NULL,
+  `kind` ENUM('execution', 'repair') NOT NULL DEFAULT 'execution',
   `status` ENUM('queued', 'generating', 'running', 'success', 'failed') NOT NULL,
   `failureReason` TEXT NULL,
+  `logs` LONGTEXT NULL,
   `stdout` LONGTEXT NULL,
   `stderr` LONGTEXT NULL,
+  `sourceRunLogId` INTEGER NULL,
   `startedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `finishedAt` DATETIME(3) NULL,
   INDEX `RunLog_testCaseId_idx` (`testCaseId`),
+  INDEX `RunLog_sourceRunLogId_idx` (`sourceRunLogId`),
   CONSTRAINT `RunLog_testCaseId_fkey` FOREIGN KEY (`testCaseId`) REFERENCES `TestCase` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `RunLog_sourceRunLogId_fkey` FOREIGN KEY (`sourceRunLogId`) REFERENCES `RunLog` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
   PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
