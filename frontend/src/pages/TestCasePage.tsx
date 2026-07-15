@@ -192,7 +192,9 @@ export function TestCasePage() {
   function handleRepair(item: TestCaseListItem) {
     modal.confirm({
       title: "AI 修复失败用例",
-      content: "AI 将分析失败日志、录屏、业务代码和真实页面。只有脚本修复验证通过后才会替换当前脚本；用例内容问题会生成待审核候选。",
+      content: item.scriptNeedsGeneration
+        ? "当前用例在脚本生成阶段失败。AI 将诊断用例内容和失败原因；可安全修改时生成待审核的自然语言修复候选，否则给出不可修复结论。"
+        : "AI 将分析失败日志、录屏、业务代码和真实页面。只有脚本修复验证通过后才会替换当前脚本；用例内容问题会生成待审核候选。",
       okText: "开始修复",
       cancelText: "取消",
       async onOk() {
@@ -609,7 +611,7 @@ export function TestCasePage() {
                       <Tooltip title="运行">
                         <Button icon={<PlayCircleOutlined />} onClick={() => void handleRun(record)} />
                       </Tooltip>
-                      {record.status === "failed" && !record.scriptNeedsGeneration && !record.pendingRepairCandidateId ? (
+                      {record.status === "failed" && !record.pendingRepairCandidateId ? (
                         <Tooltip title="AI 修复">
                           <Button icon={<ToolOutlined />} onClick={() => handleRepair(record)} />
                         </Tooltip>

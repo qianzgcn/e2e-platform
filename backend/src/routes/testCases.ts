@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "../infra/prisma.js";
-import { assertNoProjectVariableValues, assertPreservesVariablePlaceholders } from "../prompts/scriptRepair.js";
+import { assertNoProjectVariableValues, assertUsesOnlySourceVariablePlaceholders } from "../prompts/scriptRepair.js";
+import { formatTestDataSafetyIssue, validateTestDataSafety } from "../prompts/testDataSafety.js";
 import { getRunArtifacts } from "../utils/artifactService.js";
 import { removeGeneratedTestScript, removeTestCaseArtifacts } from "../utils/cleanupService.js";
 import { resolveScriptGenerationOnSave } from "../utils/testCaseScriptGeneration.js";
@@ -456,6 +457,11 @@ testCasesRouter.post("/candidates/import", async (req, res) => {
     const existingIds = new Set(existing.map((candidate) => candidate.id));
     const projectId = existing[0].projectId;
     const rows = valid.filter((row) => existingIds.has(row.id));
+    const unsafeRow = rows.find((row) => validateTestDataSafety(row.naturalLanguage));
+    if (unsafeRow) {
+      const issue = validateTestDataSafety(unsafeRow.naturalLanguage)!;
+      throw new Error(`候选用例“${unsafeRow.title}”未通过测试数据安全检查\n${formatTestDataSafetyIssue(issue)}`);
+    }
     const { createdIds, skippedRows } = await createTestCasesFromRows(projectId, rows);
     await prisma.testCaseCandidate.updateMany({
       where: { id: { in: existing.map((candidate) => candidate.id) }, kind: "generated", status: "pending" },
@@ -495,7 +501,11 @@ testCasesRouter.post("/candidates/:id/apply-repair", async (req, res) => {
     }
 
     assertNoProjectVariableValues(naturalLanguage, candidate.project.variables);
-    assertPreservesVariablePlaceholders(candidate.sourceNaturalLanguage ?? "", naturalLanguage);
+    assertUsesOnlySourceVariablePlaceholders(candidate.sourceNaturalLanguage ?? "", naturalLanguage);
+    const safetyIssue = validateTestDataSafety(naturalLanguage);
+    if (safetyIssue) {
+      throw new Error(`修复候选仍会影响既有业务数据\n${formatTestDataSafetyIssue(safetyIssue)}`);
+    }
     const target = candidate.targetTestCase;
     const sourceEditedAt = candidate.sourceEditedAt;
     const updated = await prisma.$transaction(async (tx) => {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { loadPrompt } from "./loadPrompt.js";
+import { loadSystemPrompt } from "./loadPrompt.js";
 
 const testCaseCandidateSchema = z
   .object({
@@ -19,7 +19,7 @@ type CaseGenerationProject = {
 };
 
 export function loadCaseGenerationSystemPrompt() {
-  return loadPrompt("case-generation.system.md");
+  return loadSystemPrompt("case-generation.system.md");
 }
 
 export function buildCaseGenerationPrompt(

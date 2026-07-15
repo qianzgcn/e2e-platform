@@ -7,10 +7,11 @@ import { ensureRepo } from "../infra/repoService.js";
 import { runPlaywright } from "../infra/runnerService.js";
 import {
   assertNoProjectVariableValues,
-  assertPreservesVariablePlaceholders,
+  assertUsesOnlySourceVariablePlaceholders,
   redactProjectVariableValues,
   type ScriptRepairResult,
 } from "../prompts/scriptRepair.js";
+import { formatTestDataSafetyIssue, validateTestDataSafety } from "../prompts/testDataSafety.js";
 import { formatScriptRepairProgress, repairScriptWithAgent } from "./scriptRepairAgentService.js";
 import { getRunArtifactEvidence } from "../utils/artifactService.js";
 import { shouldGenerateScript } from "../utils/testCaseScriptGeneration.js";
@@ -181,9 +182,6 @@ export async function repairTestCase(testCaseId: string) {
 
   if (!testCase) throw new Error("用例不存在");
   if (testCase.status !== "failed") throw new Error("只有当前状态为失败的用例才能进行 AI 修复");
-  if (testCase.scriptNeedsGeneration || !testCase.playwrightScript?.trim()) {
-    throw new Error("当前用例没有可修复的 Playwright 脚本，请先运行并生成脚本");
-  }
   if (!testCase.runLogs[0]) throw new Error("未找到可用于诊断的失败记录");
   if (testCase.repairCandidates.length) throw new Error("该用例已有待审核的修复候选，请先处理候选");
 
@@ -288,6 +286,15 @@ function dispatchTasks(tasks: RunTask[], project: ProjectConfig) {
   for (const task of tasks) {
     const { testCase } = task;
 
+    const safetyIssue = validateTestDataSafety(testCase.naturalLanguage);
+    if (safetyIssue) {
+      const message = `用例未通过测试数据安全检查\n${formatTestDataSafetyIssue(safetyIssue)}`;
+      void appendRunLog(task, message);
+      logRun("测试数据安全检查未通过", { runLogId: task.runLogId, testCaseId: testCase.id });
+      void finishTask(task, "failed", { stdout: "", stderr: "", failureReason: message });
+      continue;
+    }
+
     if (
       !shouldGenerateScript({
         scriptNeedsGeneration: testCase.scriptNeedsGeneration,
@@ -308,7 +315,13 @@ function dispatchTasks(tasks: RunTask[], project: ProjectConfig) {
       generationQueue.enqueue({
         kind: "generation",
         task,
-        source: { id: testCase.id, title: testCase.title, naturalLanguage: resolvedNaturalLanguage },
+        source: {
+          id: testCase.id,
+          title: testCase.title,
+          originalNaturalLanguage: testCase.naturalLanguage,
+          naturalLanguage: resolvedNaturalLanguage,
+          protectedVariablePlaceholders: project.variables.map((variable) => `\${${variable.name}}`),
+        },
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "变量解析失败";
@@ -514,7 +527,10 @@ async function repairSingleTestCase(item: RepairItem, sessionId: string) {
   if (!transitioned) return;
 
   const control = registerGenerationControl([task]);
-  const originalScript = task.testCase.playwrightScript!;
+  const originalScript = !task.testCase.scriptNeedsGeneration && task.testCase.playwrightScript?.trim()
+    ? task.testCase.playwrightScript
+    : null;
+  const repairMode = originalScript ? "script_or_case" : "case_only";
   const specPath = path.resolve(process.cwd(), "tests", "generated", `${task.testCase.id}.spec.ts`);
   const candidateSpecPath = path.resolve(
     process.cwd(),
@@ -525,7 +541,11 @@ async function repairSingleTestCase(item: RepairItem, sessionId: string) {
   let lastProgress = "";
 
   try {
-    await writeFile(candidateSpecPath, originalScript, "utf8");
+    if (originalScript) {
+      await writeFile(candidateSpecPath, originalScript, "utf8");
+    } else {
+      await appendRunLog(task, "当前没有有效的 Playwright 脚本，将仅诊断自然语言用例和失败原因");
+    }
     await appendRunLog(task, "开始收集最近一次失败记录和 Playwright 产物");
     const evidence = await getRunArtifactEvidence(task.testCase.id, sourceRunLog.id);
     const videoPaths = evidence.artifacts.filter((artifact) => artifact.type === "video").map((artifact) => artifact.filePath);
@@ -556,11 +576,21 @@ async function repairSingleTestCase(item: RepairItem, sessionId: string) {
       await appendRunLog(task, "项目未配置业务代码仓库，将使用其他证据诊断");
     }
 
-    const resolvedNaturalLanguage = resolveVariables(task.testCase.naturalLanguage, project.variables);
+    let resolvedNaturalLanguage: string | null = null;
+    if (repairMode === "script_or_case") {
+      try {
+        resolvedNaturalLanguage = resolveVariables(task.testCase.naturalLanguage, project.variables);
+      } catch {
+        await appendRunLog(task, "项目变量无法完整解析，将使用原始用例和失败记录继续诊断");
+      }
+    }
     await appendRunLog(task, "失败证据准备完成，进入 AI 根因分析");
     const repairResult = await repairScriptWithAgent({
+      repairMode,
       baseUrl: task.baseUrl,
-      targetFile: path.relative(process.cwd(), candidateSpecPath).replaceAll(path.sep, "/"),
+      targetFile: originalScript
+        ? path.relative(process.cwd(), candidateSpecPath).replaceAll(path.sep, "/")
+        : null,
       businessRepository: repositoryPath,
       projectInstructions: task.projectInstructions,
       testCase: {
@@ -568,6 +598,7 @@ async function repairSingleTestCase(item: RepairItem, sessionId: string) {
         title: task.testCase.title,
         originalNaturalLanguage: task.testCase.naturalLanguage,
         resolvedNaturalLanguage,
+        protectedVariablePlaceholders: project.variables.map((variable) => `\${${variable.name}}`),
       },
       currentScript: originalScript,
       sourceFailure: {
@@ -588,6 +619,7 @@ async function repairSingleTestCase(item: RepairItem, sessionId: string) {
       stopReason: USER_STOP_FAILURE_REASON,
       sessionId,
       repairLogId: task.runLogId,
+      projectVariables: project.variables,
       onProgress: async (message) => {
         const progress = formatScriptRepairProgress(message);
         if (progress && progress !== lastProgress) {
@@ -627,7 +659,11 @@ async function handleRepairResult(
   const { task, project } = item;
   if (result.outcome === "case_repair") {
     assertNoProjectVariableValues(result.naturalLanguage, project.variables);
-    assertPreservesVariablePlaceholders(task.testCase.naturalLanguage, result.naturalLanguage);
+    assertUsesOnlySourceVariablePlaceholders(task.testCase.naturalLanguage, result.naturalLanguage);
+    const safetyIssue = validateTestDataSafety(result.naturalLanguage);
+    if (safetyIssue) {
+      throw new Error(`AI 返回的自然语言修复候选仍会影响既有业务数据\n${formatTestDataSafetyIssue(safetyIssue)}`);
+    }
     if (result.naturalLanguage.trim() === task.testCase.naturalLanguage.trim()) {
       throw new Error("AI 返回的自然语言修复候选与原用例相同");
     }
@@ -649,6 +685,10 @@ async function handleRepairResult(
     await appendRunLog(task, message);
     await finishTask(task, "failed", { stdout: "", stderr: "", failureReason: message });
     return;
+  }
+
+  if (task.testCase.scriptNeedsGeneration || !task.testCase.playwrightScript?.trim()) {
+    throw new Error("当前用例没有可修复的 Playwright 脚本，不能应用脚本修复结果");
   }
 
   const candidateScript = await readFile(candidateSpecPath, "utf8");

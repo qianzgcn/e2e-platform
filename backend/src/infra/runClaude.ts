@@ -15,8 +15,10 @@ type RunClaudeOptions = {
   systemPrompt?: Options["systemPrompt"];
   tools?: Options["tools"];
   allowedTools?: Options["allowedTools"];
+  disallowedTools?: Options["disallowedTools"];
   settingSources?: Options["settingSources"];
   skills?: Options["skills"];
+  hooks?: Options["hooks"];
 };
 
 // 通过 Claude Agent SDK 执行一次生成任务，返回最终结果文本；失败时抛出带可读原因的 Error。
@@ -62,8 +64,10 @@ async function drainClaudeStream(
       systemPrompt: options.systemPrompt,
       tools: options.tools,
       allowedTools: options.allowedTools,
+      disallowedTools: options.disallowedTools,
       settingSources: options.settingSources,
       skills: options.skills,
+      hooks: options.hooks,
     },
   });
 

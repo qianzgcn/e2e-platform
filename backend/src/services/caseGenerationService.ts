@@ -6,6 +6,7 @@ import {
   parseTestCaseCandidates,
   type TestCaseCandidate,
 } from "../prompts/caseGeneration.js";
+import { formatTestDataSafetyIssue, validateTestDataSafety } from "../prompts/testDataSafety.js";
 
 export type { TestCaseCandidate } from "../prompts/caseGeneration.js";
 
@@ -50,6 +51,7 @@ export async function generateTestCaseCandidates(
     },
     tools: ["Read", "Glob", "Grep"],
     allowedTools: ["Read", "Glob", "Grep"],
+    disallowedTools: ["mcp__*"],
     settingSources: ["user"],
     skills: [],
     onProgress: async (message) => {
@@ -62,7 +64,12 @@ export async function generateTestCaseCandidates(
 
   await record("AI 响应完成，正在校验候选格式");
   const candidates = parseTestCaseCandidates(resultText);
-  await record(`候选格式校验通过，共 ${candidates.length} 条`);
+  const unsafeCandidateIndex = candidates.findIndex((candidate) => validateTestDataSafety(candidate.naturalLanguage));
+  if (unsafeCandidateIndex >= 0) {
+    const issue = validateTestDataSafety(candidates[unsafeCandidateIndex].naturalLanguage)!;
+    throw new Error(`第 ${unsafeCandidateIndex + 1} 条候选未通过测试数据安全校验\n${formatTestDataSafetyIssue(issue)}`);
+  }
+  await record(`候选格式与测试数据安全校验通过，共 ${candidates.length} 条`);
   return { candidates };
 }
 

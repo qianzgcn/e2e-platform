@@ -1,9 +1,11 @@
-import { loadPrompt } from "./loadPrompt.js";
+import { loadSystemPrompt } from "./loadPrompt.js";
 
 export type ScriptSource = {
   title: string;
   id: string;
+  originalNaturalLanguage: string;
   naturalLanguage: string;
+  protectedVariablePlaceholders: string[];
 };
 
 export type ScriptGenerationError = {
@@ -16,7 +18,7 @@ const ERROR_START_TAG = "<script-generation-error>";
 const ERROR_END_TAG = "</script-generation-error>";
 
 export function loadScriptGenerationSystemPrompt() {
-  return loadPrompt("script-generation.system.md");
+  return loadSystemPrompt("script-generation.system.md");
 }
 
 export function buildScriptGenerationPrompt(

@@ -1,20 +1,24 @@
 {
   "permissions": {
     "allow": [
-      "Read",
-      "Write",
-      "Edit",
-      "MultiEdit",
+      "Read(./tests/**)",
+      "Read(./test-results/**)",
+      "Read(./.repair-work/**)",
+      "Read(./.repos/**)",
+      "Read(./package.json)",
+      "Write(./tests/generated/**)",
+      "Edit(./tests/generated/**)",
       "Glob",
       "Grep",
-      "LS",
       "Skill(playwright-cli)",
-      "Bash(playwright-cli:*)",
-      "Bash(npx:*)",
-      "Bash(npm:*)",
-      "Bash(ls:*)",
-      "Bash(node:*)",
-      "Bash(mkdir:*)"
+      "Bash(playwright-cli *)",
+      "Bash(npm run test:generated *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Write(./.env)",
+      "Edit(./.env)"
     ]
   }
 }

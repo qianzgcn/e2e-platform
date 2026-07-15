@@ -1,4 +1,5 @@
 import { runClaude } from "../infra/runClaude.js";
+import { SCRIPT_AGENT_HOOKS } from "../infra/scriptAgentToolPolicy.js";
 import {
   buildScriptRepairPrompt,
   loadScriptRepairSystemPrompt,
@@ -12,10 +13,14 @@ type RepairAgentOptions = {
   onProgress?: (message: string) => void | Promise<void>;
   sessionId: string;
   repairLogId: number;
+  projectVariables: Array<{ name: string; value: string }>;
 };
 
 export async function repairScriptWithAgent(input: ScriptRepairPromptInput, options: RepairAgentOptions) {
-  const prompt = buildScriptRepairPrompt(input);
+  const prompt = buildScriptRepairPrompt(input, options.projectVariables);
+  const tools = input.repairMode === "script_or_case"
+    ? ["Read", "Edit", "Glob", "Grep", "Bash"]
+    : ["Read", "Glob", "Grep", "Bash"];
   console.log("[scriptRepairAgent] 准备调用 AI 修复", {
     caseId: input.testCase.id,
     repairLogId: options.repairLogId,
@@ -39,13 +44,14 @@ export async function repairScriptWithAgent(input: ScriptRepairPromptInput, opti
       preset: "claude_code",
       append: await loadScriptRepairSystemPrompt(),
     },
-    tools: ["Read", "Edit", "Glob", "Grep", "Bash"],
-    allowedTools: ["Read", "Edit", "Glob", "Grep", "Bash"],
+    tools,
+    disallowedTools: ["mcp__*"],
     settingSources: ["user", "project"],
     skills: ["playwright-cli"],
+    hooks: SCRIPT_AGENT_HOOKS,
   });
 
-  return parseScriptRepairResult(result);
+  return parseScriptRepairResult(result, input.repairMode);
 }
 
 export function formatScriptRepairProgress(message: string): string | null {

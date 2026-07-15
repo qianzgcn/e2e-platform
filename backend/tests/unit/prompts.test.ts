@@ -12,12 +12,13 @@ import {
 } from "../../src/prompts/scriptGeneration.js";
 import {
   assertNoProjectVariableValues,
-  assertPreservesVariablePlaceholders,
+  assertUsesOnlySourceVariablePlaceholders,
   buildScriptRepairPrompt,
   loadScriptRepairSystemPrompt,
   parseScriptRepairResult,
   redactProjectVariableValues,
 } from "../../src/prompts/scriptRepair.js";
+import { validateTestDataSafety } from "../../src/prompts/testDataSafety.js";
 
 test("case generation prompt keeps dynamic inputs as separate JSON fields", () => {
   const project = {
@@ -59,7 +60,9 @@ test("script generation prompt contains one case and project instructions", () =
   const testCase = {
     id: "case-1",
     title: "新增用户",
+    originalNaturalLanguage: "1. 输入账号 ${username}\n2. 验证新增成功",
     naturalLanguage: "1. 输入账号 \"alice\"\n2. 验证新增成功",
+    protectedVariablePlaceholders: ["${username}"],
   };
   const prompt = buildScriptGenerationPrompt(testCase, "http://localhost:5173", " 仅管理员可操作 ");
 
@@ -75,12 +78,12 @@ test("script generation error parser returns an actionable problem and suggestio
   const result = parseScriptGenerationError(`无法继续生成：
 <script-generation-error>
 问题：步骤 2 要选择项目“示例项目”，但前置条件没有说明该项目应已存在，真实页面中也未找到该数据。
-修改建议：在前置步骤中创建“示例项目”，或把步骤 2 改为选择一个明确存在的项目变量。
+修改建议：运行时创建唯一临时项目并在 finally 中清理，或者把步骤 2 改为只读查询一个明确存在的项目变量。
 </script-generation-error>`);
 
   assert.deepEqual(result, {
     problem: "步骤 2 要选择项目“示例项目”，但前置条件没有说明该项目应已存在，真实页面中也未找到该数据。",
-    suggestion: "在前置步骤中创建“示例项目”，或把步骤 2 改为选择一个明确存在的项目变量。",
+    suggestion: "运行时创建唯一临时项目并在 finally 中清理，或者把步骤 2 改为只读查询一个明确存在的项目变量。",
   });
 });
 
@@ -101,6 +104,7 @@ test("script generation error parser ignores success and rejects incomplete erro
 
 test("script repair prompt keeps evidence fields inside valid JSON", () => {
   const input = {
+    repairMode: "script_or_case" as const,
     baseUrl: "http://localhost:5173",
     targetFile: "tests/generated/case-1.spec.ts",
     businessRepository: "C:/repo/business",
@@ -110,6 +114,7 @@ test("script repair prompt keeps evidence fields inside valid JSON", () => {
       title: "新增用户",
       originalNaturalLanguage: "1. 输入 ${username}\n2. 保存",
       resolvedNaturalLanguage: "1. 输入 admin\n2. 保存",
+      protectedVariablePlaceholders: ["${username}"],
     },
     currentScript: "test('新增用户', async () => {})",
     sourceFailure: {
@@ -123,6 +128,43 @@ test("script repair prompt keeps evidence fields inside valid JSON", () => {
   };
 
   assert.deepEqual(JSON.parse(buildScriptRepairPrompt(input)), input);
+});
+
+test("script repair prompt supports case-only diagnosis when script generation failed", () => {
+  const prompt = buildScriptRepairPrompt({
+    repairMode: "case_only",
+    baseUrl: "http://localhost:5173",
+    targetFile: "tests/generated/should-not-be-exposed.spec.ts",
+    businessRepository: null,
+    projectInstructions: null,
+    testCase: {
+      id: "case-1",
+      title: "创建项目",
+      originalNaturalLanguage: "1. 创建 ${testProject}",
+      resolvedNaturalLanguage: "1. 创建 ProtectedFixtureProject",
+      protectedVariablePlaceholders: ["${testProject}"],
+    },
+    currentScript: "test('must not be exposed', () => {})",
+    sourceFailure: {
+      runLogId: 1,
+      failureReason: "项目 ProtectedFixtureProject 已存在",
+      stdout: "无法创建 ProtectedFixtureProject",
+      stderr: "ProtectedFixtureProject 冲突",
+      artifactPaths: [],
+      videoFramePaths: [],
+    },
+  }, [{ name: "testProject", value: "ProtectedFixtureProject" }]);
+
+  const parsed = JSON.parse(prompt);
+  assert.equal(parsed.repairMode, "case_only");
+  assert.equal(parsed.targetFile, null);
+  assert.equal(parsed.currentScript, null);
+  assert.equal(parsed.testCase.resolvedNaturalLanguage, null);
+  assert.equal(parsed.sourceFailure.failureReason, "项目 ${testProject} 已存在");
+  assert.equal(parsed.sourceFailure.stdout, "无法创建 ${testProject}");
+  assert.equal(parsed.sourceFailure.stderr, "${testProject} 冲突");
+  assert.doesNotMatch(prompt, /ProtectedFixtureProject/);
+  assert.doesNotMatch(prompt, /must not be exposed/);
 });
 
 test("script repair result parser accepts exactly three strict outcomes", () => {
@@ -142,6 +184,13 @@ test("script repair result parser accepts exactly three strict outcomes", () => 
     () => parseScriptRepairResult('<script-repair-result>{"outcome":"script_repair","summary":"ok","extra":true}</script-repair-result>'),
     /格式无效/,
   );
+  assert.throws(
+    () => parseScriptRepairResult(
+      '<script-repair-result>{"outcome":"script_repair","summary":"修正脚本"}</script-repair-result>',
+      "case_only",
+    ),
+    /没有可修复的 Playwright 脚本/,
+  );
   assert.throws(() => parseScriptRepairResult("没有结果块"), /完整的修复结果/);
 });
 
@@ -155,15 +204,41 @@ test("repair candidate rejects real project variable values and redacts messages
   assert.equal(redactProjectVariableValues("密码 SuperSecret 无效", variables), "密码 ${password} 无效");
 });
 
-test("repair candidate preserves every variable placeholder from the source case", () => {
-  assert.doesNotThrow(() => assertPreservesVariablePlaceholders(
+test("repair candidate may remove an unsafe placeholder but cannot introduce unknown placeholders", () => {
+  assert.doesNotThrow(() => assertUsesOnlySourceVariablePlaceholders(
     "1. 输入 ${ username }\n2. 输入 ${password}",
-    "1. 输入 ${username}\n2. 输入 ${password}\n3. 提交",
+    "1. 输入 ${username}\n2. 使用运行时唯一临时数据",
   ));
   assert.throws(
-    () => assertPreservesVariablePlaceholders("1. 输入 ${username}\n2. 输入 ${password}", "1. 输入 ${username}"),
-    /缺少原用例变量 \$\{password\}/,
+    () => assertUsesOnlySourceVariablePlaceholders("1. 输入 ${username}", "1. 输入 ${manager}"),
+    /引入了原用例未配置的变量 \$\{manager\}/,
   );
+});
+
+test("test data safety rejects writes to existing data without isolated setup and cleanup", () => {
+  const issue = validateTestDataSafety([
+    "1. 使用 ${admin_user} 与 ${admin_password} 登录系统",
+    "2. 点击新建项目",
+    "3. 在项目名称输入 ${testProject}",
+    "4. 点击确定",
+    "5. 预期提示创建成功",
+  ].join("\n"));
+
+  assert.ok(issue);
+  assert.match(issue.problem, /已经存在的所有业务数据都禁止修改或删除/);
+  assert.match(issue.suggestion, /先创建临时对象/);
+});
+
+test("test data safety accepts read-only cases and isolated write cases", () => {
+  assert.equal(validateTestDataSafety(
+    "1. 使用 ${admin_user} 登录\n2. 查询项目 ${testProject}\n3. 断言项目详情可见",
+  ), null);
+  assert.equal(validateTestDataSafety([
+    "1. 使用 ${admin_user} 登录",
+    "2. 本次运行生成唯一临时项目名称",
+    "3. 创建临时项目，只操作本次创建的项目并断言创建成功",
+    "4. 在 finally 中无论成功或失败都清理本次临时项目",
+  ].join("\n")), null);
 });
 
 test("candidate parser accepts strict valid JSON and trims fields", () => {
@@ -199,9 +274,11 @@ test("system prompt files are available from the backend runtime directory", asy
   ]);
 
   assert.match(casePrompt, /E2E 自然语言用例生成/);
+  assert.match(casePrompt, /受保护的既有业务数据/);
   assert.match(scriptPrompt, /Playwright 自动化脚本生成/);
   assert.match(scriptPrompt, /不得创建或覆盖 spec/);
   assert.match(scriptPrompt, /修改建议/);
   assert.match(repairPrompt, /Playwright 自动化用例修复/);
   assert.match(repairPrompt, /case_repair/);
+  assert.match(repairPrompt, /受保护的既有业务数据/);
 });

@@ -1,12 +1,14 @@
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { runClaude } from "../infra/runClaude.js";
+import { SCRIPT_AGENT_HOOKS } from "../infra/scriptAgentToolPolicy.js";
 import {
   buildScriptGenerationPrompt,
   loadScriptGenerationSystemPrompt,
   parseScriptGenerationError,
   type ScriptSource,
 } from "../prompts/scriptGeneration.js";
+import { formatTestDataSafetyIssue, validateTestDataSafety } from "../prompts/testDataSafety.js";
 
 export type { ScriptSource } from "../prompts/scriptGeneration.js";
 
@@ -25,6 +27,10 @@ export async function generateScript(testCase: ScriptSource, baseUrl: string, op
   logAgent("准备调用 Claude 生成", { caseId: testCase.id, baseUrl, promptLength: prompt.length });
 
   try {
+    const safetyIssue = validateTestDataSafety(testCase.originalNaturalLanguage);
+    if (safetyIssue) {
+      throw new Error(`用例无法生成自动化脚本\n${formatTestDataSafetyIssue(safetyIssue)}`);
+    }
     await removeTargetScript(testCase.id);
     const result = await runClaude(prompt, {
       cwd: process.cwd(),
@@ -38,8 +44,10 @@ export async function generateScript(testCase: ScriptSource, baseUrl: string, op
         append: await loadScriptGenerationSystemPrompt(),
       },
       tools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+      disallowedTools: ["mcp__*"],
       settingSources: ["user", "project"],
       skills: ["playwright-cli"],
+      hooks: SCRIPT_AGENT_HOOKS,
     });
 
     const generationError = parseScriptGenerationError(result);

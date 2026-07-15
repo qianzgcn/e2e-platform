@@ -1,10 +1,19 @@
 ---
 name: playwright-cli
 description: Automate browser interactions, test web pages and work with Playwright tests.
-allowed-tools: Bash(playwright-cli:*) Bash(npx:*) Bash(npm:*)
+allowed-tools:
+  - "Bash(playwright-cli *)"
+  - "Bash(npm run test:generated *)"
 ---
 
 # Browser Automation with playwright-cli
+
+## Platform contract
+
+- The platform has already loaded this Skill and prepended the local `node_modules/.bin` directory to `PATH`.
+- Invoke `playwright-cli` directly. Do not search for this Skill or probe the executable with `ls`, `which`, `where`, `Get-Command`, `--help`, or filesystem scans.
+- Each Bash tool call must contain exactly one `playwright-cli ...` command or one `npm run test:generated -- ...` command. Do not chain commands with `;`, `&&`, `||`, pipes, redirections, subshells, or command substitution.
+- A rejected unrelated shell command does not mean `playwright-cli` is unavailable. Continue with a direct allowed command.
 
 ## Quick start
 
@@ -178,16 +187,13 @@ playwright-cli highlight --hide
 
 ## Raw output
 
-The global `--raw` option strips page status, generated code, and snapshot sections from the output, returning only the result value. Use it to pipe command output into other tools. Commands that don't produce output return nothing.
+The global `--raw` option strips page status, generated code, and snapshot sections from the output, returning only the result value. Read that value directly from the Bash tool result; do not pipe or redirect it. Commands that don't produce output return nothing.
 
 ```bash
-playwright-cli --raw eval "JSON.stringify(performance.timing)" | jq '.loadEventEnd - .navigationStart'
-playwright-cli --raw eval "JSON.stringify([...document.querySelectorAll('a')].map(a => a.href))" > links.json
-playwright-cli --raw snapshot > before.yml
-playwright-cli click e5
-playwright-cli --raw snapshot > after.yml
-diff before.yml after.yml
-TOKEN=$(playwright-cli --raw cookie-get session_id)
+playwright-cli --raw eval "JSON.stringify(performance.timing)"
+playwright-cli --raw eval "JSON.stringify([...document.querySelectorAll('a')].map(a => a.href))"
+playwright-cli --raw snapshot
+playwright-cli --raw cookie-get session_id
 playwright-cli --raw localstorage-get theme
 ```
 
@@ -304,20 +310,6 @@ playwright-cli list
 playwright-cli close-all
 # Forcefully kill all browser processes
 playwright-cli kill-all
-```
-
-## Installation
-
-If global `playwright-cli` command is not available, try a local version via `npx playwright-cli`:
-
-```bash
-npx --no-install playwright-cli --version
-```
-
-When local version is available, use `npx playwright-cli` in all commands. Otherwise, install `playwright-cli` as a global command:
-
-```bash
-npm install -g @playwright/cli@latest
 ```
 
 ## Example: Form submission
