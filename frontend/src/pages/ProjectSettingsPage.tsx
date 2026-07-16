@@ -1,64 +1,78 @@
-import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
-import { Button, Drawer, Form, Input, Popconfirm, Space, Table, Typography, message } from "antd";
+import { PlusOutlined } from "@ant-design/icons";
+import { Button, Empty, Tabs, Typography, message } from "antd";
 import { useEffect, useState } from "react";
-import { createProject, deleteProject, testRepoConnectivity, updateProject, type ProjectPayload } from "../api/project";
-import { useProject } from "../ProjectContext";
+import { ProjectConfigurationForm } from "../components/project-settings/ProjectConfigurationForm";
+import { EMPTY_PROJECT_FORM, type ProjectFormValues } from "../components/project-settings/projectForm";
+import { ProjectListPanel } from "../components/project-settings/ProjectListPanel";
+import {
+  createProject,
+  deleteProject,
+  fetchAutomationAdapters,
+  testRepoConnectivity,
+  updateProject,
+  type ProjectPayload,
+} from "../api/project";
+import { useProject } from "../projectContextState";
 import type { ProjectConfig } from "../types";
 
-type ProjectForm = {
-  name: string;
-  baseUrl: string;
-  repoUrl: string;
-  promptHint: string;
-  variables: Array<{ name: string; value: string; description?: string | null }>;
-};
-
-const EMPTY_FORM: ProjectForm = { name: "", baseUrl: "", repoUrl: "", promptHint: "", variables: [] };
+type SettingsTab = "configuration" | "projects";
 
 export function ProjectSettingsPage() {
-  const { projects, reloadProjects } = useProject();
-  const [form] = Form.useForm<ProjectForm>();
-  const [editing, setEditing] = useState<ProjectConfig | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const {
+    projects,
+    currentProjectId,
+    setCurrentProjectId,
+    reloadProjects,
+  } = useProject();
+  const [activeTab, setActiveTab] = useState<SettingsTab>("configuration");
+  const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testingRepo, setTestingRepo] = useState(false);
+  const [automationAdapters, setAutomationAdapters] = useState<string[]>([]);
   const [messageApi, contextHolder] = message.useMessage();
+  const currentProject = projects.find((project) => project.id === currentProjectId) ?? null;
 
   useEffect(() => {
-    void reloadProjects();
-  }, [reloadProjects]);
+    let cancelled = false;
+    void fetchAutomationAdapters()
+      .then((adapters) => {
+        if (!cancelled) setAutomationAdapters(adapters);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          messageApi.error(error instanceof Error ? error.message : "加载自动化 Adapter 失败");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [messageApi]);
 
   function openCreate() {
-    setEditing(null);
-    form.setFieldsValue(EMPTY_FORM);
-    setDrawerOpen(true);
+    setCreating(true);
+    setActiveTab("configuration");
   }
 
-  function openEdit(project: ProjectConfig) {
-    setEditing(project);
-    form.setFieldsValue({
-      name: project.name,
-      baseUrl: project.baseUrl,
-      repoUrl: project.repoUrl ?? "",
-      promptHint: project.promptHint ?? "",
-      variables: project.variables ?? [],
-    });
-    setDrawerOpen(true);
+  function openConfiguration(project: ProjectConfig) {
+    setCreating(false);
+    setCurrentProjectId(project.id);
+    setActiveTab("configuration");
   }
 
-  async function handleSubmit(values: ProjectForm) {
+  async function handleSubmit(values: ProjectFormValues) {
+    if (!creating && !currentProject) return;
+
     setSaving(true);
     try {
       const payload: ProjectPayload = { ...values, variables: values.variables ?? [] };
-      if (editing) {
-        await updateProject(editing.id, payload);
-        messageApi.success("项目已更新");
-      } else {
-        await createProject(payload);
-        messageApi.success("项目已创建");
-      }
-      setDrawerOpen(false);
+      const savedProject = creating
+        ? await createProject(payload)
+        : await updateProject(currentProject!.id, payload);
+
       await reloadProjects();
+      setCurrentProjectId(savedProject.id);
+      setCreating(false);
+      messageApi.success(creating ? "项目已创建" : "项目配置已保存");
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "保存项目失败");
     } finally {
@@ -66,20 +80,17 @@ export function ProjectSettingsPage() {
     }
   }
 
-  async function handleTestRepo() {
-    const repoUrl = form.getFieldValue("repoUrl");
+  async function handleTestRepo(repoUrl: string) {
     if (!repoUrl?.trim()) {
       messageApi.warning("请先输入代码仓库 URL");
       return;
     }
+
     setTestingRepo(true);
     try {
       const result = await testRepoConnectivity(repoUrl.trim());
-      if (result.ok) {
-        messageApi.success(result.message);
-      } else {
-        messageApi.error(result.message);
-      }
+      if (result.ok) messageApi.success(result.message);
+      else messageApi.error(result.message);
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "测试失败");
     } finally {
@@ -90,147 +101,85 @@ export function ProjectSettingsPage() {
   async function handleDelete(project: ProjectConfig) {
     try {
       await deleteProject(project.id);
-      messageApi.success("项目已删除");
       await reloadProjects();
+      messageApi.success("项目已删除");
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "删除项目失败");
     }
   }
 
+  const initialValues = creating
+    ? EMPTY_PROJECT_FORM
+    : currentProject
+      ? toProjectFormValues(currentProject)
+      : EMPTY_PROJECT_FORM;
+  const formKey = creating ? "new-project" : `project-${currentProject?.id ?? "none"}`;
+
   return (
     <div className="space-y-5">
       {contextHolder}
-      <div className="flex items-center justify-between">
-        <div>
-          <Typography.Title level={3} className="!mb-1">
-            项目管理
-          </Typography.Title>
-          <Typography.Text type="secondary">维护多个被测项目及其 baseUrl 与变量</Typography.Text>
-        </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          新建项目
-        </Button>
+      <div>
+        <Typography.Title level={3} className="!mb-1">
+          配置
+        </Typography.Title>
+        <Typography.Text type="secondary">维护当前项目的测试配置，或在项目列表中管理多个被测项目</Typography.Text>
       </div>
 
-      <div className="content-panel p-4">
-        <Table<ProjectConfig>
-          rowKey="id"
-          dataSource={projects}
-          pagination={false}
-          columns={[
-            { title: "项目名称", dataIndex: "name" },
-            { title: "baseUrl", dataIndex: "baseUrl" },
-            {
-              title: "变量数",
-              width: 100,
-              render: (_, record) => record.variables?.length ?? 0,
-            },
-            {
-              title: "操作",
-              width: 160,
-              render: (_, record) => (
-                <Space>
-                  <Button size="small" onClick={() => openEdit(record)}>
-                    编辑
-                  </Button>
-                  <Popconfirm
-                    title="删除项目"
-                    description="确认删除该项目吗？项目下有用例时无法删除。"
-                    okText="删除"
-                    okButtonProps={{ danger: true }}
-                    cancelText="取消"
-                    onConfirm={() => void handleDelete(record)}
-                  >
-                    <Button size="small" danger icon={<DeleteOutlined />}>
-                      删除
-                    </Button>
-                  </Popconfirm>
-                </Space>
-              ),
-            },
-          ]}
-        />
-      </div>
+      <Tabs
+        activeKey={activeTab}
+        onChange={(key) => setActiveTab(key as SettingsTab)}
+        items={[
+          { key: "configuration", label: "项目配置" },
+          { key: "projects", label: `项目列表（${projects.length}）` },
+        ]}
+      />
 
-      <Drawer title={editing ? "编辑项目" : "新建项目"} open={drawerOpen} onClose={() => setDrawerOpen(false)} width={560} destroyOnClose>
-        <Form layout="vertical" form={form} onFinish={handleSubmit} initialValues={EMPTY_FORM}>
-          <Form.Item name="name" label="项目名称" rules={[{ required: true, message: "请输入项目名称" }]}>
-            <Input placeholder="例如：测试平台" />
-          </Form.Item>
-          <Form.Item name="baseUrl" label="baseUrl" rules={[{ required: true, message: "请输入 baseUrl" }]}>
-            <Input placeholder="http://localhost:5173" />
-          </Form.Item>
-          <Form.Item label="代码仓库 URL" tooltip="AI 生成用例时 clone 该仓库读代码">
-            <Space.Compact style={{ width: "100%" }}>
-              <Form.Item name="repoUrl" noStyle>
-                <Input placeholder="https://github.com/owner/repo.git" />
-              </Form.Item>
-              <Button onClick={() => void handleTestRepo()} loading={testingRepo}>
-                测试连通性
+      {activeTab === "configuration" && (
+        creating || currentProject ? (
+          <ProjectConfigurationForm
+            key={formKey}
+            title={creating ? "新建项目" : currentProject!.name}
+            initialValues={initialValues}
+            automationAdapters={automationAdapters}
+            creating={creating}
+            saving={saving}
+            testingRepo={testingRepo}
+            onSubmit={handleSubmit}
+            onTestRepo={handleTestRepo}
+            onCancelCreate={() => setCreating(false)}
+          />
+        ) : (
+          <div className="content-panel py-16">
+            <Empty description="暂无项目，请先创建一个被测项目">
+              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+                新建项目
               </Button>
-            </Space.Compact>
-          </Form.Item>
-
-          <Form.Item name="promptHint" label="项目业务约束" tooltip="AI 生成用例时遵守，如角色、特殊规则">
-            <Input.TextArea
-              placeholder="如：系统有三种角色（管理员/项目经理/项目成员），不同用例需用对应角色账号；新增类用例必须幂等"
-              autoSize={{ minRows: 2, maxRows: 6 }}
-            />
-          </Form.Item>
-
-          <Form.List name="variables">
-            {(fields, { add, remove }) => (
-              <>
-                <div className="mb-3 flex items-center justify-between">
-                  <div>
-                    <Typography.Title level={5} className="!mb-0">
-                      变量组
-                    </Typography.Title>
-                    <Typography.Text type="secondary">用例中通过 {"${变量名}"} 引用变量值</Typography.Text>
-                  </div>
-                  <Button icon={<PlusOutlined />} onClick={() => add({ name: "", value: "", description: "" })}>
-                    新增变量
-                  </Button>
-                </div>
-                <div className="space-y-3">
-                  {fields.map((field) => (
-                    <div
-                      key={field.key}
-                      className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_1fr_40px]"
-                    >
-                      <Form.Item
-                        name={[field.name, "name"]}
-                        className="!mb-0"
-                        rules={[{ required: true, message: "请输入变量名" }]}
-                      >
-                        <Input placeholder="例如 username" />
-                      </Form.Item>
-                      <Form.Item
-                        name={[field.name, "value"]}
-                        className="!mb-0"
-                        rules={[{ required: true, message: "请输入变量值" }]}
-                      >
-                        <Input.Password placeholder="变量值" autoComplete="new-password" />
-                      </Form.Item>
-                      <Form.Item name={[field.name, "description"]} className="!mb-0">
-                        <Input placeholder="说明" />
-                      </Form.Item>
-                      <Button danger icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
-                    </div>
-                  ))}
-                  {fields.length === 0 && <Typography.Text type="secondary">暂无变量</Typography.Text>}
-                </div>
-              </>
-            )}
-          </Form.List>
-
-          <div className="mt-6">
-            <Button type="primary" htmlType="submit" loading={saving}>
-              保存
-            </Button>
+            </Empty>
           </div>
-        </Form>
-      </Drawer>
+        )
+      )}
+
+      {activeTab === "projects" && (
+        <ProjectListPanel
+          projects={projects}
+          currentProjectId={currentProjectId}
+          onCreate={openCreate}
+          onConfigure={openConfiguration}
+          onDelete={handleDelete}
+        />
+      )}
     </div>
   );
+}
+
+function toProjectFormValues(project: ProjectConfig): ProjectFormValues {
+  return {
+    name: project.name,
+    baseUrl: project.baseUrl,
+    repoUrl: project.repoUrl ?? "",
+    promptHint: project.promptHint ?? "",
+    automationHint: project.automationHint ?? "",
+    automationAdapterKey: project.automationAdapterKey ?? null,
+    variables: project.variables ?? [],
+  };
 }

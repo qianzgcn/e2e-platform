@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { isAllowedScriptAgentBashCommand } from "../../src/infra/scriptAgentToolPolicy.js";
+import {
+  isAllowedScriptAgentBashCommand,
+  isAllowedScriptAgentFilePath,
+} from "../../src/infra/scriptAgentToolPolicy.js";
 
 type ClaudeSettings = {
   permissions?: {
@@ -79,4 +82,27 @@ test("script agent Bash policy allows only direct CLI and generated-test command
 
   for (const command of allowed) assert.equal(isAllowedScriptAgentBashCommand(command), true, command);
   for (const command of denied) assert.equal(isAllowedScriptAgentBashCommand(command), false, command);
+});
+
+test("script agent policy restricts test execution and file edits to the current target", () => {
+  const targetFile = "tests/generated/case-1.spec.ts";
+
+  assert.equal(
+    isAllowedScriptAgentBashCommand(`npm run test:generated -- ${targetFile}`, targetFile),
+    true,
+  );
+  assert.equal(
+    isAllowedScriptAgentBashCommand("npm run test:generated -- tests/generated/explore.spec.ts", targetFile),
+    false,
+  );
+  assert.equal(
+    isAllowedScriptAgentBashCommand(`npm run test:generated -- ${targetFile}`, null),
+    false,
+  );
+
+  assert.equal(isAllowedScriptAgentFilePath(targetFile, targetFile), true);
+  assert.equal(isAllowedScriptAgentFilePath(path.resolve(targetFile), targetFile), true);
+  assert.equal(isAllowedScriptAgentFilePath("tests/generated/explore.spec.ts", targetFile), false);
+  assert.equal(isAllowedScriptAgentFilePath("tests/project-helpers/pdk-qa/index.ts", targetFile), false);
+  assert.equal(isAllowedScriptAgentFilePath(targetFile, null), false);
 });

@@ -1,7 +1,10 @@
 import { request } from "./client";
 import type { ProjectConfig } from "../types";
 
-export type ProjectPayload = Pick<ProjectConfig, "name" | "baseUrl" | "repoUrl" | "promptHint" | "variables">;
+export type ProjectPayload = Pick<
+  ProjectConfig,
+  "name" | "baseUrl" | "repoUrl" | "promptHint" | "automationHint" | "automationAdapterKey" | "variables"
+>;
 
 export function fetchProjects() {
   return request<ProjectConfig[]>("/project");
@@ -9,6 +12,10 @@ export function fetchProjects() {
 
 export function fetchProject(id: number) {
   return request<ProjectConfig>(`/project/${id}`);
+}
+
+export function fetchAutomationAdapters() {
+  return request<string[]>("/project/automation-adapters");
 }
 
 export function createProject(data: ProjectPayload) {

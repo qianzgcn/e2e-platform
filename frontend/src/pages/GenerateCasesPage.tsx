@@ -10,7 +10,7 @@ import {
   importCandidates,
   rejectRepairCandidate,
 } from "../api/testCases";
-import { useProject } from "../ProjectContext";
+import { useProject } from "../projectContextState";
 import type {
   TestCaseCandidate,
   TestCaseGeneration,

@@ -1,18 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { fetchProjects } from "./api/project";
 import type { ProjectConfig } from "./types";
+import { ProjectContextState } from "./projectContextState";
 
 const STORAGE_KEY = "currentProjectId";
-
-type ProjectContextValue = {
-  projects: ProjectConfig[];
-  currentProjectId: number | null;
-  setCurrentProjectId: (id: number | null) => void;
-  reloadProjects: () => Promise<void>;
-  loading: boolean;
-};
-
-const ProjectContext = createContext<ProjectContextValue | null>(null);
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
@@ -61,16 +52,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <ProjectContext.Provider value={{ projects, currentProjectId, setCurrentProjectId, reloadProjects, loading }}>
+    <ProjectContextState.Provider value={{ projects, currentProjectId, setCurrentProjectId, reloadProjects, loading }}>
       {children}
-    </ProjectContext.Provider>
+    </ProjectContextState.Provider>
   );
-}
-
-export function useProject() {
-  const ctx = useContext(ProjectContext);
-  if (!ctx) {
-    throw new Error("useProject 必须在 ProjectProvider 内使用");
-  }
-  return ctx;
 }

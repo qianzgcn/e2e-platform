@@ -7,6 +7,11 @@ const testCaseId = process.env.PLAYWRIGHT_TEST_CASE_ID || "latest";
 const runLogId = process.env.PLAYWRIGHT_RUN_LOG_ID || "latest";
 const testResultsDir = path.resolve("test-results", testCaseId, runLogId);
 const testArtifactsDir = path.join(testResultsDir, "artifacts");
+const baseURL = process.env.PLAYWRIGHT_BASE_URL;
+
+if (!baseURL) {
+  throw new Error("缺少 PLAYWRIGHT_BASE_URL，无法确定当前被测项目地址");
+}
 
 // 后端生成的自动化用例统一放在 tests/generated 目录。
 // 平台运行用例时只执行这个目录，避免误跑其它测试文件。
@@ -35,7 +40,7 @@ export default defineConfig({
 
   use: {
     // runner 会通过 PLAYWRIGHT_BASE_URL 注入项目配置里的 baseUrl。
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:5173",
+    baseURL,
 
     // 每次运行都保留录屏，并由 Playwright HTML 报告统一展示。
     trace: "off",

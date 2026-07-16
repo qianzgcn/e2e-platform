@@ -1,7 +1,8 @@
 import { DashboardOutlined, ProjectOutlined, RobotOutlined, SettingOutlined } from "@ant-design/icons";
 import { ConfigProvider, Layout, Menu, Select, Typography } from "antd";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { ProjectProvider, useProject } from "./ProjectContext";
+import { ProjectProvider } from "./ProjectContext";
+import { useProject } from "./projectContextState";
 import { DashboardPage } from "./pages/DashboardPage";
 import { GenerateCasesPage } from "./pages/GenerateCasesPage";
 import { ProjectSettingsPage } from "./pages/ProjectSettingsPage";

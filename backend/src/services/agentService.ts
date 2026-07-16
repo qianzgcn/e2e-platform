@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { runClaude } from "../infra/runClaude.js";
-import { SCRIPT_AGENT_HOOKS } from "../infra/scriptAgentToolPolicy.js";
+import { createScriptAgentHooks } from "../infra/scriptAgentToolPolicy.js";
 import {
   buildScriptGenerationPrompt,
   loadScriptGenerationSystemPrompt,
@@ -9,6 +9,7 @@ import {
   type ScriptSource,
 } from "../prompts/scriptGeneration.js";
 import { formatTestDataSafetyIssue, validateTestDataSafety } from "../prompts/testDataSafety.js";
+import type { ProjectAutomationAdapter } from "../types/projectAutomation.js";
 
 export type { ScriptSource } from "../prompts/scriptGeneration.js";
 
@@ -17,13 +18,22 @@ type GenerateScriptOptions = {
   stopReason?: string;
   onProgress?: (message: string) => void;
   projectInstructions?: string | null;
+  automationInstructions?: string | null;
+  automationAdapter?: ProjectAutomationAdapter | null;
   // playwright-cli 的浏览器 session 名；并发生成时每个 worker 用不同 session，互不踩浏览器。
   sessionId?: string;
 };
 
 // 调用 Claude 为单个用例生成 Playwright spec；Claude 用 Write 工具把文件落到 tests/generated。
 export async function generateScript(testCase: ScriptSource, baseUrl: string, options: GenerateScriptOptions = {}) {
-  const prompt = buildScriptGenerationPrompt(testCase, baseUrl, options.projectInstructions);
+  const targetFile = `tests/generated/${testCase.id}.spec.ts`;
+  const prompt = buildScriptGenerationPrompt(
+    testCase,
+    baseUrl,
+    options.projectInstructions,
+    options.automationInstructions,
+    options.automationAdapter,
+  );
   logAgent("准备调用 Claude 生成", { caseId: testCase.id, baseUrl, promptLength: prompt.length });
 
   try {
@@ -37,7 +47,10 @@ export async function generateScript(testCase: ScriptSource, baseUrl: string, op
       signal: options.signal,
       stopReason: options.stopReason,
       onProgress: options.onProgress,
-      env: options.sessionId ? { PLAYWRIGHT_CLI_SESSION: options.sessionId } : undefined,
+      env: {
+        PLAYWRIGHT_BASE_URL: baseUrl,
+        ...(options.sessionId ? { PLAYWRIGHT_CLI_SESSION: options.sessionId } : {}),
+      },
       systemPrompt: {
         type: "preset",
         preset: "claude_code",
@@ -47,7 +60,7 @@ export async function generateScript(testCase: ScriptSource, baseUrl: string, op
       disallowedTools: ["mcp__*"],
       settingSources: ["user", "project"],
       skills: ["playwright-cli"],
-      hooks: SCRIPT_AGENT_HOOKS,
+      hooks: createScriptAgentHooks(targetFile),
     });
 
     const generationError = parseScriptGenerationError(result);

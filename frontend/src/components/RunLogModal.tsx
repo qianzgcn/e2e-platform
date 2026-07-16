@@ -110,8 +110,10 @@ export function RunLogModal({ target, focusLogId, onClose, onStatusChange }: Run
     });
   }, [loadDetail, selectedLogId, target]);
 
+  const detailStatus = detail?.runLog.status;
+
   useEffect(() => {
-    if (!target || selectedLogId == null || !detail || !ACTIVE_STATUSES.includes(detail.runLog.status)) return;
+    if (!target || selectedLogId == null || !detailStatus || !ACTIVE_STATUSES.includes(detailStatus)) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
@@ -129,7 +131,7 @@ export function RunLogModal({ target, focusLogId, onClose, onStatusChange }: Run
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [detail?.runLog.status, historyPage, loadDetail, loadHistory, onStatusChange, selectedLogId, target]);
+  }, [detailStatus, historyPage, loadDetail, loadHistory, onStatusChange, selectedLogId, target]);
 
   function handleClose() {
     requestIdRef.current += 1;

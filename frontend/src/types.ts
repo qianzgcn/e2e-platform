@@ -112,6 +112,8 @@ export type ProjectConfig = {
   baseUrl: string;
   repoUrl?: string | null;
   promptHint?: string | null;
+  automationHint?: string | null;
+  automationAdapterKey?: string | null;
   variables: ProjectVariable[];
 };
 

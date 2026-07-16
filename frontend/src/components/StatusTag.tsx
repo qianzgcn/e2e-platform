@@ -20,7 +20,3 @@ export function StatusTag({ status, kind }: { status: TestCaseStatus; kind?: Run
   const config = kind === "repair" ? repairStatusMap[status] ?? statusMap[status] : statusMap[status];
   return <Tag color={config.color}>{config.text}</Tag>;
 }
-
-export function isBusyStatus(status: TestCaseStatus) {
-  return status === "queued" || status === "generating" || status === "running";
-}

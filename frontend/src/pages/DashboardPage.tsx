@@ -7,7 +7,7 @@ import { createTestCaseGroup, fetchTestCaseGroups } from "../api/testCaseGroups"
 import { fetchTestCase, updateTestCase } from "../api/testCases";
 import { RunLogModal } from "../components/RunLogModal";
 import { TestCaseModal } from "../components/TestCaseModal";
-import { useProject } from "../ProjectContext";
+import { useProject } from "../projectContextState";
 import type { DashboardData, TestCaseDetail, TestCaseGroup, TestCasePayload } from "../types";
 import { formatDateTime } from "../utils/date";
 
@@ -81,7 +81,7 @@ export function DashboardPage() {
 
   async function handleCreateGroup(name: string) {
     if (currentProjectId == null) {
-      return undefined;
+      throw new Error("请先选择项目");
     }
     try {
       const group = await createTestCaseGroup(currentProjectId, name);

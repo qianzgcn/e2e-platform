@@ -1,4 +1,5 @@
 import { loadSystemPrompt } from "./loadPrompt.js";
+import type { ProjectAutomationAdapter } from "../types/projectAutomation.js";
 
 export type ScriptSource = {
   title: string;
@@ -25,12 +26,16 @@ export function buildScriptGenerationPrompt(
   testCase: ScriptSource,
   baseUrl: string,
   projectInstructions?: string | null,
+  automationInstructions?: string | null,
+  automationAdapter: ProjectAutomationAdapter | null = null,
 ): string {
   return JSON.stringify(
     {
       baseUrl,
       outputDir: SCRIPT_OUTPUT_DIR,
       projectInstructions: normalizeInstruction(projectInstructions),
+      automationInstructions: normalizeInstruction(automationInstructions),
+      automationAdapter,
       testCase,
     },
     null,

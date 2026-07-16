@@ -29,18 +29,20 @@ enum RunLogKind {
 }
 
 model Project {
-  id          Int                  @id @default(autoincrement())
-  name        String               @unique
-  baseUrl     String
-  repoUrl     String?
-  promptHint  String?              @db.Text
-  createdAt   DateTime             @default(now())
-  updatedAt   DateTime             @updatedAt
-  variables   ProjectVariable[]
-  groups      TestCaseGroup[]
-  testCases   TestCase[]
-  generations TestCaseGeneration[]
-  candidates  TestCaseCandidate[]
+  id                   Int                  @id @default(autoincrement())
+  name                 String               @unique
+  baseUrl              String
+  repoUrl              String?
+  promptHint           String?              @db.Text
+  automationHint       String?              @db.Text
+  automationAdapterKey String?              @db.VarChar(191)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  variables            ProjectVariable[]
+  groups               TestCaseGroup[]
+  testCases            TestCase[]
+  generations          TestCaseGeneration[]
+  candidates           TestCaseCandidate[]
 }
 
 model ProjectVariable {

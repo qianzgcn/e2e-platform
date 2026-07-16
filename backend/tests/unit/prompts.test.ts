@@ -56,6 +56,21 @@ test("case generation prompt normalizes empty instructions to null", () => {
   });
 });
 
+test("case generation does not receive project automation instructions", () => {
+  const project = {
+    variables: [{ name: "username" }],
+    promptHint: "覆盖登录后的业务流程",
+    automationHint: "仅供脚本生成使用的登录细节",
+    automationAdapterKey: "pdk-qa",
+  };
+
+  const parsed = JSON.parse(buildCaseGenerationPrompt(project));
+  assert.equal(parsed.automationInstructions, undefined);
+  assert.equal(parsed.automationAdapter, undefined);
+  assert.equal(JSON.stringify(parsed).includes(project.automationHint), false);
+  assert.equal(JSON.stringify(parsed).includes(project.automationAdapterKey), false);
+});
+
 test("script generation prompt contains one case and project instructions", () => {
   const testCase = {
     id: "case-1",
@@ -64,14 +79,50 @@ test("script generation prompt contains one case and project instructions", () =
     naturalLanguage: "1. 输入账号 \"alice\"\n2. 验证新增成功",
     protectedVariablePlaceholders: ["${username}"],
   };
-  const prompt = buildScriptGenerationPrompt(testCase, "http://localhost:5173", " 仅管理员可操作 ");
+  const prompt = buildScriptGenerationPrompt(
+    testCase,
+    "http://localhost:5173",
+    " 仅管理员可操作 ",
+    " 登录方式需要从项目配置读取 ",
+    {
+      key: "pdk-qa",
+      modulePath: "tests/project-helpers/pdk-qa/index.ts",
+      importPath: "../project-helpers/pdk-qa",
+    },
+  );
 
   assert.deepEqual(JSON.parse(prompt), {
     baseUrl: "http://localhost:5173",
     outputDir: "tests/generated",
     projectInstructions: "仅管理员可操作",
+    automationInstructions: "登录方式需要从项目配置读取",
+    automationAdapter: {
+      key: "pdk-qa",
+      modulePath: "tests/project-helpers/pdk-qa/index.ts",
+      importPath: "../project-helpers/pdk-qa",
+    },
     testCase,
   });
+});
+
+test("script generation prompt normalizes empty project instructions", () => {
+  const prompt = buildScriptGenerationPrompt(
+    {
+      id: "case-1",
+      title: "查看首页",
+      originalNaturalLanguage: "1. 打开首页",
+      naturalLanguage: "1. 打开首页",
+      protectedVariablePlaceholders: [],
+    },
+    "https://example.test",
+    " ",
+    "\n",
+  );
+
+  const parsed = JSON.parse(prompt);
+  assert.equal(parsed.projectInstructions, null);
+  assert.equal(parsed.automationInstructions, null);
+  assert.equal(parsed.automationAdapter, null);
 });
 
 test("script generation error parser returns an actionable problem and suggestion", () => {
@@ -109,6 +160,12 @@ test("script repair prompt keeps evidence fields inside valid JSON", () => {
     targetFile: "tests/generated/case-1.spec.ts",
     businessRepository: "C:/repo/business",
     projectInstructions: "仅管理员可操作",
+    automationInstructions: "使用项目配置的登录流程",
+    automationAdapter: {
+      key: "pdk-qa",
+      modulePath: "tests/project-helpers/pdk-qa/index.ts",
+      importPath: "../project-helpers/pdk-qa",
+    },
     testCase: {
       id: "case-1",
       title: "新增用户",
@@ -137,6 +194,8 @@ test("script repair prompt supports case-only diagnosis when script generation f
     targetFile: "tests/generated/should-not-be-exposed.spec.ts",
     businessRepository: null,
     projectInstructions: null,
+    automationInstructions: null,
+    automationAdapter: null,
     testCase: {
       id: "case-1",
       title: "创建项目",
@@ -276,9 +335,18 @@ test("system prompt files are available from the backend runtime directory", asy
   assert.match(casePrompt, /E2E 自然语言用例生成/);
   assert.match(casePrompt, /受保护的既有业务数据/);
   assert.match(scriptPrompt, /Playwright 自动化脚本生成/);
+  assert.match(scriptPrompt, /automationInstructions/);
+  assert.match(scriptPrompt, /automationAdapter/);
+  assert.match(scriptPrompt, /必须先读取其 `modulePath`/);
+  assert.match(scriptPrompt, /禁止复制其实现/);
+  assert.match(scriptPrompt, /Adapter 始终只读/);
   assert.match(scriptPrompt, /不得创建或覆盖 spec/);
   assert.match(scriptPrompt, /修改建议/);
+  assert.doesNotMatch(scriptPrompt, /_COOKIE_KEY_CAPTCHA_|Element Plus|\.\.\/utils\/auth|\/login/);
   assert.match(repairPrompt, /Playwright 自动化用例修复/);
+  assert.match(repairPrompt, /automationInstructions/);
+  assert.match(repairPrompt, /automationAdapter/);
+  assert.match(repairPrompt, /禁止复制、替代或编辑 Adapter/);
   assert.match(repairPrompt, /case_repair/);
   assert.match(repairPrompt, /受保护的既有业务数据/);
 });

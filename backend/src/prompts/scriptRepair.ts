@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { loadSystemPrompt } from "./loadPrompt.js";
+import type { ProjectAutomationAdapter } from "../types/projectAutomation.js";
 
 const nonEmptyText = z.string().trim().min(1);
 
@@ -31,6 +32,8 @@ export type ScriptRepairPromptInput = {
   targetFile: string | null;
   businessRepository: string | null;
   projectInstructions: string | null;
+  automationInstructions: string | null;
+  automationAdapter: ProjectAutomationAdapter | null;
   testCase: {
     id: string;
     title: string;

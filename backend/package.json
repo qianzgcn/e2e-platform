@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && npm run typecheck:project-helpers",
     "postinstall": "patch-package",
     "start": "node dist/index.js",
     "test:unit": "tsx --test tests/unit/*.test.ts",
+    "typecheck:project-helpers": "tsc -p tsconfig.project-helpers.json",
     "prisma:generate": "prisma generate",
     "test:generated": "playwright test",
     "test:generated:headed": "playwright test --headed",

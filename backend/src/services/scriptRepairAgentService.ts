@@ -1,5 +1,5 @@
 import { runClaude } from "../infra/runClaude.js";
-import { SCRIPT_AGENT_HOOKS } from "../infra/scriptAgentToolPolicy.js";
+import { createScriptAgentHooks } from "../infra/scriptAgentToolPolicy.js";
 import {
   buildScriptRepairPrompt,
   loadScriptRepairSystemPrompt,
@@ -48,7 +48,7 @@ export async function repairScriptWithAgent(input: ScriptRepairPromptInput, opti
     disallowedTools: ["mcp__*"],
     settingSources: ["user", "project"],
     skills: ["playwright-cli"],
-    hooks: SCRIPT_AGENT_HOOKS,
+    hooks: createScriptAgentHooks(input.targetFile),
   });
 
   return parseScriptRepairResult(result, input.repairMode);
