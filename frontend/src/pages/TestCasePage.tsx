@@ -402,10 +402,10 @@ export function TestCasePage() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="test-case-page">
       {contextHolder}
       {modalContextHolder}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="test-case-page-header flex flex-wrap items-center justify-between gap-3">
         <div>
           <Typography.Title level={3} className="!mb-1">
             用例管理
@@ -420,7 +420,7 @@ export function TestCasePage() {
       {currentProjectId == null ? (
         <Alert type="info" showIcon message="请先在顶部选择一个项目" />
       ) : (
-        <div className="content-panel p-4">
+        <div className="test-case-table-panel content-panel p-4">
           <TestCaseToolbar
             loading={loading}
             runningAll={runningAll}

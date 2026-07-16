@@ -17,7 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchTestCaseLogDetail, fetchTestCaseLogs } from "../api/testCases";
 import { toBackendUrl } from "../api/url";
-import type { RunLogStatus, RunLogSummary, TestCaseLogDetail } from "../types";
+import type { RunLog, RunLogStatus, RunLogSummary, TestCaseLogDetail } from "../types";
 import { formatDateTime } from "../utils/date";
 import { StatusTag } from "./StatusTag";
 
@@ -139,6 +139,7 @@ export function RunLogModal({ target, focusLogId, onClose, onStatusChange }: Run
   }
 
   const candidate = detail?.runLog.repairCandidate;
+  const timing = detail ? getRunTiming(detail.runLog) : null;
 
   return (
     <>
@@ -182,6 +183,9 @@ export function RunLogModal({ target, focusLogId, onClose, onStatusChange }: Run
                       </div>
                       <Typography.Text className="mt-1 block text-xs" type="secondary">
                         #{item.id} · {formatDateTime(item.startedAt)}
+                      </Typography.Text>
+                      <Typography.Text className="mt-1 block text-xs" type="secondary">
+                        {formatRunTimingSummary(item)}
                       </Typography.Text>
                       {item.repairCandidate ? (
                         <Tag className="mt-1" color={candidateStatusColor(item.repairCandidate.status)}>
@@ -228,6 +232,14 @@ export function RunLogModal({ target, focusLogId, onClose, onStatusChange }: Run
                             </Descriptions.Item>
                             <Descriptions.Item label="开始时间">{formatDateTime(detail.runLog.startedAt)}</Descriptions.Item>
                             <Descriptions.Item label="结束时间">{formatDateTime(detail.runLog.finishedAt)}</Descriptions.Item>
+                            {timing ? (
+                              <>
+                                <Descriptions.Item label="总耗时">{timing.total}</Descriptions.Item>
+                                <Descriptions.Item label="排队耗时">{timing.queued}</Descriptions.Item>
+                                <Descriptions.Item label={timing.generationLabel}>{timing.generation}</Descriptions.Item>
+                                <Descriptions.Item label={timing.executionLabel}>{timing.execution}</Descriptions.Item>
+                              </>
+                            ) : null}
                             {detail.runLog.sourceRunLogId ? (
                               <Descriptions.Item label="失败来源">运行记录 #{detail.runLog.sourceRunLogId}</Descriptions.Item>
                             ) : null}
@@ -345,4 +357,79 @@ function candidateStatusText(status: "pending" | "imported" | "rejected") {
 
 function candidateStatusColor(status: "pending" | "imported" | "rejected") {
   return { pending: "warning", imported: "success", rejected: "default" }[status];
+}
+
+type RunTimingSource = Pick<
+  RunLog,
+  | "kind"
+  | "status"
+  | "startedAt"
+  | "finishedAt"
+  | "generationStartedAt"
+  | "executionStartedAt"
+>;
+
+function getRunTiming(runLog: RunTimingSource) {
+  const firstStageStartedAt = runLog.generationStartedAt ?? runLog.executionStartedAt;
+  const generationFinishedAt = runLog.executionStartedAt ?? runLog.finishedAt;
+  const isRepair = runLog.kind === "repair";
+
+  return {
+    total: formatDuration(runLog.startedAt, runLog.finishedAt),
+    queued: firstStageStartedAt
+      ? formatDuration(runLog.startedAt, firstStageStartedAt)
+      : runLog.status === "queued"
+        ? formatDuration(runLog.startedAt, null)
+        : "暂无阶段记录",
+    generationLabel: isRepair ? "AI 修复耗时" : "脚本生成耗时",
+    generation: runLog.generationStartedAt
+      ? formatDuration(runLog.generationStartedAt, generationFinishedAt)
+      : runLog.executionStartedAt && !isRepair
+        ? "复用已有脚本"
+        : "未进入该阶段",
+    executionLabel: isRepair ? "修复验证耗时" : "用例执行耗时",
+    execution: runLog.executionStartedAt
+      ? formatDuration(runLog.executionStartedAt, runLog.finishedAt)
+      : "未进入该阶段",
+  };
+}
+
+function formatRunTimingSummary(runLog: RunTimingSource) {
+  const timing = getRunTiming(runLog);
+  const stages = [`总计 ${timing.total}`];
+  if (runLog.generationStartedAt) {
+    stages.push(`${runLog.kind === "repair" ? "AI 修复" : "生成"} ${timing.generation}`);
+  }
+  if (runLog.executionStartedAt) {
+    stages.push(`${runLog.kind === "repair" ? "验证" : "执行"} ${timing.execution}`);
+  }
+  return stages.join(" · ");
+}
+
+function formatDuration(start: string, end?: string | null) {
+  const startedAt = Date.parse(start);
+  const finishedAt = end ? Date.parse(end) : Date.now();
+  if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt)) {
+    return "—";
+  }
+
+  const durationMs = Math.max(0, finishedAt - startedAt);
+  if (durationMs < 1000) {
+    return `${durationMs} 毫秒`;
+  }
+
+  const totalSeconds = durationMs / 1000;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)} 秒`;
+  }
+
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  if (totalMinutes < 60) {
+    return `${totalMinutes} 分 ${seconds} 秒`;
+  }
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours} 小时 ${minutes} 分 ${seconds} 秒`;
 }

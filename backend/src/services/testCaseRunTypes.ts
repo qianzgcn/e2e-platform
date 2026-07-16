@@ -12,6 +12,8 @@ export type ProjectVariable = {
 export type ProjectConfig = {
   baseUrl: string;
   repoUrl: string | null;
+  repoBranch: string | null;
+  repoSubdirectory: string | null;
   promptHint: string | null;
   automationHint: string | null;
   automationAdapter: ProjectAutomationAdapter | null;

@@ -15,6 +15,7 @@ type FinishOutput = {
 // 只推进仍活跃的运行，避免用户停止后被后台流程重新写回运行中或成功。
 export async function updateRunStatus(runLogId: number, testCaseId: string, status: SharedRunningStatus) {
   logRun("更新用例运行状态", { runLogId, testCaseId, status });
+  const transitionedAt = new Date();
   return prisma.$transaction(async (tx) => {
     const runLogResult = await tx.runLog.updateMany({
       where: {
@@ -23,7 +24,11 @@ export async function updateRunStatus(runLogId: number, testCaseId: string, stat
         status: { in: ACTIVE_STATUSES },
         finishedAt: null,
       },
-      data: { status },
+      data: {
+        status,
+        generationStartedAt: status === "generating" ? transitionedAt : undefined,
+        executionStartedAt: status === "running" ? transitionedAt : undefined,
+      },
     });
 
     if (runLogResult.count !== 1) {

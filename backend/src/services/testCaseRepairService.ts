@@ -69,7 +69,11 @@ export async function executeTestCaseRepair(item: RepairItem, sessionId: string,
     if (project.repoUrl) {
       await appendRunLog(task, "正在同步业务代码仓库");
       try {
-        repositoryPath = await ensureRepo(project.repoUrl, task.testCase.projectId);
+        repositoryPath = await ensureRepo({
+          repoUrl: project.repoUrl,
+          repoBranch: project.repoBranch,
+          repoSubdirectory: project.repoSubdirectory,
+        }, task.testCase.projectId);
         await appendRunLog(task, "业务代码仓库同步完成");
       } catch (error) {
         await appendRunLog(task, `业务代码仓库不可用，将使用其他证据：${toErrorMessage(error)}`);

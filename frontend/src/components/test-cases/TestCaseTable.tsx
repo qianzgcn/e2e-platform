@@ -55,6 +55,7 @@ export function TestCaseTable({
 
   return (
     <Table<TestCaseListItem>
+      className="test-case-table"
       rowKey="id"
       loading={loading}
       dataSource={items}
@@ -179,7 +180,7 @@ export function TestCaseTable({
           ),
         },
       ]}
-      scroll={{ x: "max-content" }}
+      scroll={{ x: "max-content", y: "100%" }}
     />
   );
 }

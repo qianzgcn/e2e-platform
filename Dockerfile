@@ -59,8 +59,10 @@ COPY --from=backend-builder /app/runtime ./
 COPY --from=frontend-builder /app/frontend/dist ./public
 COPY docker-entrypoint.sh /usr/local/bin/e2e-platform-entrypoint
 
-# 后端生产依赖已在 backend-builder 阶段裁剪好，这里只补全全局 CLI 和 Chromium。
-RUN npm install -g @anthropic-ai/claude-code @playwright/cli@latest \
+# 后端生产依赖已在 backend-builder 阶段裁剪好，这里补全 Git、全局 CLI 和 Chromium。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && npm install -g @anthropic-ai/claude-code @playwright/cli@latest \
     && npx --no-install playwright install --with-deps chromium \
     && ln -s "$(find /root/.cache/ms-playwright -path '*/chrome-linux/chrome' -type f | head -n 1)" /usr/local/bin/playwright-chromium \
     && npm cache clean --force \

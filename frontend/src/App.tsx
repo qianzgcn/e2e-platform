@@ -43,7 +43,7 @@ export default function App() {
     >
       <ProjectProvider>
         <Layout className="app-shell">
-          <Layout.Sider width={232} theme="light" className="border-r border-gray-200">
+          <Layout.Sider width={232} theme="light" className="app-shell-sider border-r border-gray-200">
             <div className="px-5 py-5">
               <Typography.Title level={4} className="!mb-0">
                 AI 测试平台
@@ -61,11 +61,11 @@ export default function App() {
               ]}
             />
           </Layout.Sider>
-          <Layout>
-            <Layout.Header className="flex items-center border-b border-gray-200 bg-white px-6">
+          <Layout className="app-shell-main">
+            <Layout.Header className="app-shell-header flex items-center border-b border-gray-200 bg-white px-6">
               <ProjectSwitcher />
             </Layout.Header>
-            <Layout.Content className="px-8 py-7">
+            <Layout.Content className="app-shell-content px-8 py-7">
               <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />

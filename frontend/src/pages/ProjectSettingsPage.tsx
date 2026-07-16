@@ -80,15 +80,19 @@ export function ProjectSettingsPage() {
     }
   }
 
-  async function handleTestRepo(repoUrl: string) {
-    if (!repoUrl?.trim()) {
+  async function handleTestRepo(source: Pick<ProjectFormValues, "repoUrl" | "repoBranch" | "repoSubdirectory">) {
+    if (!source.repoUrl?.trim()) {
       messageApi.warning("请先输入代码仓库 URL");
       return;
     }
 
     setTestingRepo(true);
     try {
-      const result = await testRepoConnectivity(repoUrl.trim());
+      const result = await testRepoConnectivity({
+        repoUrl: source.repoUrl.trim(),
+        repoBranch: source.repoBranch?.trim() || null,
+        repoSubdirectory: source.repoSubdirectory?.trim() || null,
+      });
       if (result.ok) messageApi.success(result.message);
       else messageApi.error(result.message);
     } catch (error) {
@@ -177,6 +181,8 @@ function toProjectFormValues(project: ProjectConfig): ProjectFormValues {
     name: project.name,
     baseUrl: project.baseUrl,
     repoUrl: project.repoUrl ?? "",
+    repoBranch: project.repoBranch ?? "",
+    repoSubdirectory: project.repoSubdirectory ?? "",
     promptHint: project.promptHint ?? "",
     automationHint: project.automationHint ?? "",
     automationAdapterKey: project.automationAdapterKey ?? null,

@@ -21,6 +21,8 @@ testCaseLogRoutes.get("/:id/logs", async (req, res) => {
         kind: true,
         status: true,
         sourceRunLogId: true,
+        generationStartedAt: true,
+        executionStartedAt: true,
         startedAt: true,
         finishedAt: true,
         repairCandidate: { select: { id: true, status: true } },

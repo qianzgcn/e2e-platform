@@ -9,6 +9,8 @@ export async function startCaseGeneration(projectId: number, hint?: string) {
     where: { id: projectId },
     select: {
       repoUrl: true,
+      repoBranch: true,
+      repoSubdirectory: true,
       promptHint: true,
       variables: { select: { name: true } },
     },
@@ -47,6 +49,8 @@ async function executeGeneration(
   projectId: number,
   project: {
     repoUrl: string | null;
+    repoBranch: string | null;
+    repoSubdirectory: string | null;
     promptHint: string | null;
     variables: Array<{ name: string }>;
   },
@@ -58,7 +62,11 @@ async function executeGeneration(
 
   try {
     await record("正在同步项目代码仓库");
-    const repoPath = await ensureRepo(project.repoUrl!, projectId);
+    const repoPath = await ensureRepo({
+      repoUrl: project.repoUrl!,
+      repoBranch: project.repoBranch,
+      repoSubdirectory: project.repoSubdirectory,
+    }, projectId);
     await record("代码仓库同步完成");
 
     const { candidates } = await generateTestCaseCandidates(repoPath, project, hint, {

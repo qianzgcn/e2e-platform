@@ -9,6 +9,7 @@ const repeatableSqlFiles = [
   "change_column.sql",
   "add_project_id.sql",
   "add_repo_url.sql",
+  "add_repo_source_scope.sql",
   "add_project_prompt_hint.sql",
   "add_project_automation_hint.sql",
   "add_project_automation_adapter.sql",
@@ -16,6 +17,7 @@ const repeatableSqlFiles = [
   "add_generation_status.sql",
   "invalidate_legacy_failure_scripts.sql",
   "add_repair_workflow.sql",
+  "add_run_log_timing.sql",
   "invalidate_legacy_auth_helper_scripts.sql",
 ];
 

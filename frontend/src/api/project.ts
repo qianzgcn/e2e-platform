@@ -3,8 +3,18 @@ import type { ProjectConfig } from "../types";
 
 export type ProjectPayload = Pick<
   ProjectConfig,
-  "name" | "baseUrl" | "repoUrl" | "promptHint" | "automationHint" | "automationAdapterKey" | "variables"
+  | "name"
+  | "baseUrl"
+  | "repoUrl"
+  | "repoBranch"
+  | "repoSubdirectory"
+  | "promptHint"
+  | "automationHint"
+  | "automationAdapterKey"
+  | "variables"
 >;
+
+export type RepositorySourcePayload = Pick<ProjectConfig, "repoUrl" | "repoBranch" | "repoSubdirectory">;
 
 export function fetchProjects() {
   return request<ProjectConfig[]>("/project");
@@ -38,9 +48,9 @@ export function deleteProject(id: number) {
   });
 }
 
-export function testRepoConnectivity(repoUrl: string) {
+export function testRepoConnectivity(source: RepositorySourcePayload) {
   return request<{ ok: boolean; message: string }>("/project/test-repo", {
     method: "POST",
-    body: JSON.stringify({ repoUrl }),
+    body: JSON.stringify(source),
   });
 }

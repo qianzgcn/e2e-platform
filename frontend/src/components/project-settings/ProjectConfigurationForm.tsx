@@ -10,7 +10,9 @@ type ProjectConfigurationFormProps = {
   saving: boolean;
   testingRepo: boolean;
   onSubmit: (values: ProjectFormValues) => Promise<void>;
-  onTestRepo: (repoUrl: string) => Promise<void>;
+  onTestRepo: (
+    source: Pick<ProjectFormValues, "repoUrl" | "repoBranch" | "repoSubdirectory">,
+  ) => Promise<void>;
   onCancelCreate: () => void;
 };
 
@@ -70,19 +72,46 @@ export function ProjectConfigurationForm({
               </Form.Item>
             </div>
 
-            <Form.Item label="代码仓库 URL" tooltip="AI 只读取该仓库，用于理解业务代码和页面实现">
+            <Form.Item
+              label="代码仓库 URL"
+              tooltip="AI 只读取该仓库，用于理解业务代码和页面实现"
+              extra="请填写 Git clone 地址；网页地址中的分支和子目录请分别填写到下方。"
+            >
               <Space.Compact block>
                 <Form.Item name="repoUrl" noStyle>
                   <Input placeholder="https://github.com/owner/repo.git" />
                 </Form.Item>
                 <Button
                   loading={testingRepo}
-                  onClick={() => void onTestRepo(form.getFieldValue("repoUrl"))}
+                  onClick={() => void onTestRepo(form.getFieldsValue([
+                    "repoUrl",
+                    "repoBranch",
+                    "repoSubdirectory",
+                  ]))}
                 >
                   测试连通性
                 </Button>
               </Space.Compact>
             </Form.Item>
+
+            <div className="grid grid-cols-1 gap-x-5 lg:grid-cols-2">
+              <Form.Item
+                name="repoBranch"
+                label="仓库分支（可选）"
+                extra="留空时使用远程仓库的默认分支。"
+                rules={[{ max: 255, message: "仓库分支不能超过 255 个字符" }]}
+              >
+                <Input placeholder="例如：main" />
+              </Form.Item>
+              <Form.Item
+                name="repoSubdirectory"
+                label="仓库子目录（可选）"
+                extra="填写仓库内相对目录；配置后仅检出并分析该目录。"
+                rules={[{ max: 1000, message: "仓库子目录不能超过 1000 个字符" }]}
+              >
+                <Input placeholder="例如：examples/todomvc" />
+              </Form.Item>
+            </div>
           </div>
 
           <div className="border-t border-gray-200 pt-7">

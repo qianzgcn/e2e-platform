@@ -2,8 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
+  overflow: hidden;
   background: #f5f7fb;
   color: #1f2937;
   font-family:
@@ -16,18 +23,83 @@ body {
     sans-serif;
 }
 
-.ant-layout {
-  min-height: 100vh;
+.app-shell {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #f5f7fb;
 }
 
-.app-shell {
-  background: #f5f7fb;
+.app-shell-sider {
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-shell-main {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-shell-header {
+  flex: 0 0 auto;
+}
+
+.app-shell-content {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .content-panel {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.test-case-page {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.test-case-page-header {
+  flex: 0 0 auto;
+}
+
+.test-case-table-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.test-case-table,
+.test-case-table > .ant-spin,
+.test-case-table .ant-spin-container,
+.test-case-table .ant-table,
+.test-case-table .ant-table-container {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.test-case-table .ant-table-body {
+  min-height: 0;
+  flex: 1;
+  max-height: none !important;
+  overflow-y: auto !important;
+}
+
+.test-case-table .ant-pagination {
+  flex: 0 0 auto;
 }
 
 .code-editor {

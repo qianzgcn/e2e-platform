@@ -111,6 +111,8 @@ export type ProjectConfig = {
   name: string;
   baseUrl: string;
   repoUrl?: string | null;
+  repoBranch?: string | null;
+  repoSubdirectory?: string | null;
   promptHint?: string | null;
   automationHint?: string | null;
   automationAdapterKey?: string | null;
@@ -136,6 +138,8 @@ export type RunLog = {
   stdout?: string | null;
   stderr?: string | null;
   sourceRunLogId?: number | null;
+  generationStartedAt?: string | null;
+  executionStartedAt?: string | null;
   startedAt: string;
   finishedAt?: string | null;
   repairCandidate?: RepairCandidateReference | null;
@@ -152,7 +156,15 @@ export type RepairCandidateReference = {
 
 export type RunLogSummary = Pick<
   RunLog,
-  "id" | "testCaseId" | "kind" | "status" | "sourceRunLogId" | "startedAt" | "finishedAt"
+  | "id"
+  | "testCaseId"
+  | "kind"
+  | "status"
+  | "sourceRunLogId"
+  | "generationStartedAt"
+  | "executionStartedAt"
+  | "startedAt"
+  | "finishedAt"
 > & {
   repairCandidate: Pick<RepairCandidateReference, "id" | "status"> | null;
 };

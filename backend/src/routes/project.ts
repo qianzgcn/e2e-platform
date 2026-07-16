@@ -5,7 +5,11 @@ import {
   ProjectAutomationAdapterError,
   resolveProjectAutomationAdapter,
 } from "../infra/projectAutomationAdapter.js";
-import { testRepoConnectivity } from "../infra/repoService.js";
+import {
+  normalizeRepositorySource,
+  RepositorySourceError,
+  testRepoConnectivity,
+} from "../infra/repoService.js";
 import { ACTIVE_STATUSES } from "../utils/runStatus.js";
 
 export const projectRouter = Router();
@@ -43,7 +47,7 @@ projectRouter.get("/", async (_req, res) => {
 
 // 新建项目（项目名唯一）。
 projectRouter.post("/", async (req, res) => {
-  const { name, baseUrl, repoUrl, promptHint, automationHint } = req.body;
+  const { name, baseUrl, promptHint, automationHint } = req.body;
   const variables = normalizeVariables(req.body.variables);
 
   if (!name || !baseUrl) {
@@ -52,12 +56,15 @@ projectRouter.post("/", async (req, res) => {
   }
 
   try {
+    const repository = normalizeRepositorySource(req.body);
     const automationAdapterKey = await normalizeAutomationAdapterKey(req.body.automationAdapterKey);
     const project = await prisma.project.create({
       data: {
         name,
         baseUrl,
-        repoUrl,
+        repoUrl: repository?.repoUrl ?? null,
+        repoBranch: repository?.repoBranch ?? null,
+        repoSubdirectory: repository?.repoSubdirectory ?? null,
         promptHint: promptHint || null,
         automationHint: automationHint || null,
         automationAdapterKey,
@@ -76,16 +83,16 @@ projectRouter.get("/automation-adapters", async (_req, res) => {
   res.json(await listProjectAutomationAdapters());
 });
 
-// 测试代码仓库 URL 是否可访问（git ls-remote，不 clone）。
+// 测试仓库、分支及可选子目录；临时检出不会写入项目缓存。
 projectRouter.post("/test-repo", async (req, res) => {
-  const repoUrl = typeof req.body.repoUrl === "string" ? req.body.repoUrl.trim() : "";
-  if (!repoUrl) {
-    res.status(400).json({ message: "请输入代码仓库 URL" });
-    return;
-  }
   try {
-    await testRepoConnectivity(repoUrl);
-    res.json({ ok: true, message: "仓库连通正常" });
+    const repository = normalizeRepositorySource(req.body);
+    if (!repository) {
+      res.status(400).json({ message: "请输入代码仓库 URL" });
+      return;
+    }
+    await testRepoConnectivity(repository);
+    res.json({ ok: true, message: "仓库、分支和子目录均可访问" });
   } catch (error) {
     res.json({ ok: false, message: error instanceof Error ? error.message : "无法访问仓库" });
   }
@@ -103,7 +110,7 @@ projectRouter.get("/:id", async (req, res) => {
 
 projectRouter.put("/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const { name, baseUrl, repoUrl, promptHint, automationHint } = req.body;
+  const { name, baseUrl, promptHint, automationHint } = req.body;
   const variables = normalizeVariables(req.body.variables);
 
   if (!name || !baseUrl) {
@@ -112,6 +119,7 @@ projectRouter.put("/:id", async (req, res) => {
   }
 
   try {
+    const repository = normalizeRepositorySource(req.body);
     const automationAdapterKey = await normalizeAutomationAdapterKey(req.body.automationAdapterKey);
     const existing = await prisma.project.findUnique({
       where: { id },
@@ -139,7 +147,9 @@ projectRouter.put("/:id", async (req, res) => {
         data: {
           name,
           baseUrl,
-          repoUrl,
+          repoUrl: repository?.repoUrl ?? null,
+          repoBranch: repository?.repoBranch ?? null,
+          repoSubdirectory: repository?.repoSubdirectory ?? null,
           promptHint: promptHint || null,
           automationHint: automationHint || null,
           automationAdapterKey,
@@ -195,7 +205,7 @@ async function normalizeAutomationAdapterKey(raw: unknown) {
 }
 
 function sendProjectWriteError(res: Response, error: unknown) {
-  if (error instanceof ProjectAutomationAdapterError) {
+  if (error instanceof ProjectAutomationAdapterError || error instanceof RepositorySourceError) {
     res.status(400).json({ message: error.message });
     return;
   }

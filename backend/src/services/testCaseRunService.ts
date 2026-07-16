@@ -434,6 +434,7 @@ async function generateSingleScript(item: ScriptGenerationItem, sessionId: strin
     return;
   }
 
+  const generationStartedAt = Date.now();
   const control = registerGenerationControl([task]);
   void appendRunLog(task, "进入 AI 脚本生成");
   logRun("开始调用 agent 生成用例", { runLogId: task.runLogId, testCaseId: source.id, sessionId });
@@ -450,7 +451,7 @@ async function generateSingleScript(item: ScriptGenerationItem, sessionId: strin
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Claude 生成用例失败";
-    void appendRunLog(task, `AI 脚本生成失败：${message}`);
+    void appendRunLog(task, `AI 脚本生成失败（耗时 ${formatElapsedDuration(generationStartedAt)}）：${message}`);
     logRun("agent 生成用例失败", { runLogId: task.runLogId, testCaseId: source.id, message });
     await finishRunTask(task, "failed", { stdout: "", stderr: "", failureReason: message });
     return;
@@ -459,6 +460,7 @@ async function generateSingleScript(item: ScriptGenerationItem, sessionId: strin
   }
 
   if (await saveGeneratedScript(task)) {
+    await appendRunLog(task, `AI 脚本生成完成，耗时 ${formatElapsedDuration(generationStartedAt)}`);
     readyQueue.enqueue(task);
   }
 }
@@ -532,6 +534,7 @@ async function executeTask(task: RunTask) {
     return;
   }
 
+  const executionStartedAt = Date.now();
   // runPlaywright 通过 Playwright 命令退出码返回 success，服务层只负责落最终状态。
   const playwrightControl = registerPlaywrightControl(task);
   let result;
@@ -545,7 +548,7 @@ async function executeTask(task: RunTask) {
   }
 
   if (result.success) {
-    void appendRunLog(task, "Playwright 执行成功");
+    void appendRunLog(task, `Playwright 执行成功，耗时 ${formatElapsedDuration(executionStartedAt)}`);
     logRun("用例执行成功", {
       runLogId: task.runLogId,
       testCaseId: latestTestCase.id,
@@ -554,7 +557,10 @@ async function executeTask(task: RunTask) {
     return;
   }
 
-  void appendRunLog(task, `Playwright 执行失败：${truncateRunLogMessage(result.failureReason ?? "未知错误")}`);
+  void appendRunLog(
+    task,
+    `Playwright 执行失败（耗时 ${formatElapsedDuration(executionStartedAt)}）：${truncateRunLogMessage(result.failureReason ?? "未知错误")}`,
+  );
   logRun("用例执行失败", {
     runLogId: task.runLogId,
     testCaseId: latestTestCase.id,
@@ -803,4 +809,26 @@ function toStopRunResult(targets: StopTarget[]): StopRunResult {
     stopped: true,
     affectedTestCaseIds: Array.from(new Set(targets.map((target) => target.testCaseId))),
   };
+}
+
+function formatElapsedDuration(startedAt: number) {
+  const durationMs = Math.max(0, Date.now() - startedAt);
+  if (durationMs < 1000) {
+    return `${durationMs} 毫秒`;
+  }
+
+  const totalSeconds = durationMs / 1000;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)} 秒`;
+  }
+
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  if (totalMinutes < 60) {
+    return `${totalMinutes} 分 ${seconds} 秒`;
+  }
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours} 小时 ${minutes} 分 ${seconds} 秒`;
 }

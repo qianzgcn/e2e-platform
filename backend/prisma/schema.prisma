@@ -32,7 +32,9 @@ model Project {
   id                   Int                  @id @default(autoincrement())
   name                 String               @unique
   baseUrl              String
-  repoUrl              String?
+  repoUrl              String?              @db.VarChar(500)
+  repoBranch           String?              @db.VarChar(255)
+  repoSubdirectory     String?              @db.VarChar(1000)
   promptHint           String?              @db.Text
   automationHint       String?              @db.Text
   automationAdapterKey String?              @db.VarChar(191)
@@ -110,6 +112,8 @@ model RunLog {
   sourceRunLog    RunLog?            @relation("RepairSource", fields: [sourceRunLogId], references: [id], onDelete: SetNull)
   repairLogs      RunLog[]           @relation("RepairSource")
   repairCandidate TestCaseCandidate? @relation("RepairCandidate")
+  generationStartedAt DateTime?
+  executionStartedAt  DateTime?
   startedAt       DateTime           @default(now())
   finishedAt      DateTime?
 
