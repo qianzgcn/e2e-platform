@@ -13,6 +13,13 @@ const testCaseCandidatesSchema = z.array(testCaseCandidateSchema).min(1);
 
 export type TestCaseCandidate = z.infer<typeof testCaseCandidateSchema>;
 
+export type CaseGenerationSafetyFeedback = {
+  candidateNumber: number;
+  candidate: TestCaseCandidate;
+  problem: string;
+  suggestion: string;
+};
+
 type CaseGenerationProject = {
   variables: Array<{ name: string }>;
   promptHint: string | null;
@@ -26,20 +33,39 @@ export function buildCaseGenerationPrompt(
   project: CaseGenerationProject,
   hint?: string,
 ): string {
+  return JSON.stringify(buildCaseGenerationInput(project, hint), null, 2);
+}
+
+export function buildCaseGenerationSafetyCorrectionPrompt(
+  project: CaseGenerationProject,
+  hint: string | undefined,
+  unsafeCandidates: CaseGenerationSafetyFeedback[],
+): string {
+  return JSON.stringify(
+    {
+      mode: "correct_test_data_safety",
+      ...buildCaseGenerationInput(project, hint),
+      unsafeCandidates,
+    },
+    null,
+    2,
+  );
+}
+
+function buildCaseGenerationInput(
+  project: CaseGenerationProject,
+  hint?: string,
+) {
   const variablePlaceholders = project.variables
     .map((variable) => variable.name.trim())
     .filter(Boolean)
     .map((name) => `\${${name}}`);
 
-  return JSON.stringify(
-    {
-      variablePlaceholders,
-      projectInstructions: normalizeInstruction(project.promptHint),
-      requestInstructions: normalizeInstruction(hint),
-    },
-    null,
-    2,
-  );
+  return {
+    variablePlaceholders,
+    projectInstructions: normalizeInstruction(project.promptHint),
+    requestInstructions: normalizeInstruction(hint),
+  };
 }
 
 export function parseTestCaseCandidates(text: string): TestCaseCandidate[] {

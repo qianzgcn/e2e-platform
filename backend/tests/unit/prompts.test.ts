@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildCaseGenerationPrompt,
+  buildCaseGenerationSafetyCorrectionPrompt,
   loadCaseGenerationSystemPrompt,
   parseTestCaseCandidates,
 } from "../../src/prompts/caseGeneration.js";
@@ -54,6 +55,41 @@ test("case generation prompt normalizes empty instructions to null", () => {
     projectInstructions: null,
     requestInstructions: null,
   });
+});
+
+test("case generation safety correction prompt contains only unsafe candidates and no variable values", () => {
+  const unsafeCandidate = {
+    title: "成功创建新项目",
+    groupName: "项目管理",
+    naturalLanguage: "1. 使用 ${testProject} 创建项目\n2. 点击确定",
+  };
+  const prompt = buildCaseGenerationSafetyCorrectionPrompt(
+    {
+      variables: [{ name: "testProject", value: "ProtectedProject" }],
+      promptHint: "不得影响已有数据",
+    },
+    "覆盖项目管理",
+    [{
+      candidateNumber: 4,
+      candidate: unsafeCandidate,
+      problem: "缺少运行时唯一临时数据",
+      suggestion: "创建并清理本次运行的临时项目",
+    }],
+  );
+
+  assert.deepEqual(JSON.parse(prompt), {
+    mode: "correct_test_data_safety",
+    variablePlaceholders: ["${testProject}"],
+    projectInstructions: "不得影响已有数据",
+    requestInstructions: "覆盖项目管理",
+    unsafeCandidates: [{
+      candidateNumber: 4,
+      candidate: unsafeCandidate,
+      problem: "缺少运行时唯一临时数据",
+      suggestion: "创建并清理本次运行的临时项目",
+    }],
+  });
+  assert.equal(prompt.includes("ProtectedProject"), false);
 });
 
 test("case generation does not receive project automation instructions", () => {
@@ -334,6 +370,8 @@ test("system prompt files are available from the backend runtime directory", asy
 
   assert.match(casePrompt, /E2E 自然语言用例生成/);
   assert.match(casePrompt, /受保护的既有业务数据/);
+  assert.match(casePrompt, /自动安全修正/);
+  assert.match(casePrompt, /correct_test_data_safety/);
   assert.match(scriptPrompt, /Playwright 自动化脚本生成/);
   assert.match(scriptPrompt, /automationInstructions/);
   assert.match(scriptPrompt, /automationAdapter/);
