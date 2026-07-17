@@ -1,0 +1,3 @@
+AI Coder GitHub 工作流冒烟测试
+创建时间：2026-07-17 11:01:19 +08:00
+用途：验证 clone、修改、commit、push 与 PR 创建流程。
