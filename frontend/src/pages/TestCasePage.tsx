@@ -16,6 +16,7 @@ import {
   runTestCases,
   repairTestCase,
   stopTestCase,
+  stopTestCases,
   updateTestCase,
 } from "../api/testCases";
 import { RunLogModal } from "../components/RunLogModal";
@@ -24,6 +25,7 @@ import { TestCaseTable } from "../components/test-cases/TestCaseTable";
 import { TestCaseToolbar } from "../components/test-cases/TestCaseToolbar";
 import { useProject } from "../projectContextState";
 import type {
+  BatchStopRunResult,
   RunRequestResult,
   StopRunResult,
   TestCaseDetail,
@@ -56,6 +58,8 @@ export function TestCasePage() {
   const [modal, modalContextHolder] = Modal.useModal();
 
   const hasBusyCase = items.some((item) => isBusyStatus(item.status));
+  const activeItems = items.filter((item) => isBusyStatus(item.status));
+  const activeCount = activeItems.length;
 
   const loadTestCases = useCallback(async (showLoading = true) => {
     if (currentProjectId == null) {
@@ -290,6 +294,46 @@ export function TestCasePage() {
     }
   }
 
+  async function handleBatchStop() {
+    const activeIds = activeItems.map((item) => item.id);
+    if (!activeIds.length) {
+      return;
+    }
+
+    modal.confirm({
+      title: "批量停止用例",
+      content: `确认停止当前列表中全部 ${activeIds.length} 条活跃用例吗？`,
+      okText: "停止",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      async onOk() {
+        try {
+          let successCount = 0;
+          let failedCount = 0;
+          // 单条时后端返回 StopRunResult，多条时返回 BatchStopRunResult，分支处理保证类型安全。
+          if (activeIds.length === 1) {
+            const result: StopRunResult = await stopTestCase(activeIds[0]);
+            successCount = result.stopped ? 1 : 0;
+            failedCount = result.stopped ? 0 : 1;
+          } else {
+            const result: BatchStopRunResult = await stopTestCases(activeIds);
+            successCount = result.successCount;
+            failedCount = result.failedCount;
+          }
+          if (failedCount) {
+            messageApi.warning(`已停止 ${successCount} 条，${failedCount} 条停止失败`);
+          } else {
+            messageApi.success(`已停止 ${successCount} 条用例`);
+          }
+          await loadTestCases();
+        } catch (error) {
+          messageApi.error(error instanceof Error ? error.message : "批量停止失败");
+          throw error;
+        }
+      },
+    });
+  }
+
   async function handleStop(item: TestCaseListItem) {
     const stop = async () => {
       try {
@@ -427,11 +471,13 @@ export function TestCasePage() {
             exporting={exporting}
             importing={importing}
             selectedCount={selectedRowKeys.length}
+            activeCount={activeCount}
             onSearch={setTitleKeyword}
             onRefresh={() => void loadTestCases()}
             onRunAll={() => void handleRunAll()}
             onGenerate={() => navigate("/generate-cases")}
             onBatchRun={() => void handleBatchRun()}
+            onBatchStop={() => void handleBatchStop()}
             onBatchDelete={() => void handleBatchDelete()}
             onExport={() => void handleExportSelected()}
             onImportFile={handleImportFile}

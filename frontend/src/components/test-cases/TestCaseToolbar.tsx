@@ -4,6 +4,7 @@ import {
   ImportOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
+  StopOutlined,
 } from "@ant-design/icons";
 import { Button, Input, Space, Typography } from "antd";
 import type { ChangeEvent } from "react";
@@ -15,11 +16,13 @@ type TestCaseToolbarProps = {
   exporting: boolean;
   importing: boolean;
   selectedCount: number;
+  activeCount: number;
   onSearch: (value: string) => void;
   onRefresh: () => void;
   onRunAll: () => void;
   onGenerate: () => void;
   onBatchRun: () => void;
+  onBatchStop: () => void;
   onBatchDelete: () => void;
   onExport: () => void;
   onImportFile: (file: File) => Promise<void>;
@@ -31,11 +34,13 @@ export function TestCaseToolbar({
   exporting,
   importing,
   selectedCount,
+  activeCount,
   onSearch,
   onRefresh,
   onRunAll,
   onGenerate,
   onBatchRun,
+  onBatchStop,
   onBatchDelete,
   onExport,
   onImportFile,
@@ -64,6 +69,9 @@ export function TestCaseToolbar({
         </Button>
         <Button icon={<PlayCircleOutlined />} loading={runningAll} onClick={onRunAll}>
           全量运行
+        </Button>
+        <Button danger icon={<StopOutlined />} disabled={!activeCount} onClick={onBatchStop}>
+          批量停止
         </Button>
         <Button onClick={onGenerate}>AI 生成</Button>
       </Space>
