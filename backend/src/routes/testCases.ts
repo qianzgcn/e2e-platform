@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { prisma } from "../infra/prisma.js";
 import { removeGeneratedTestScript, removeTestCaseArtifacts } from "../utils/cleanupService.js";
 import { resolveScriptGenerationOnSave } from "../utils/testCaseScriptGeneration.js";
-import { repairTestCase, runAllTestCases, runTestCase, runTestCases, stopTestCaseRun } from "../services/testCaseRunService.js";
+import { repairTestCase, runAllTestCases, runTestCase, runTestCases, stopTestCaseRun, stopTestCases } from "../services/testCaseRunService.js";
 import { testCaseCandidateRoutes } from "./testCases/candidateRoutes.js";
 import { testCaseGenerationRoutes } from "./testCases/generationRoutes.js";
 import { testCaseImportExportRoutes } from "./testCases/importExportRoutes.js";
@@ -289,8 +289,9 @@ testCasesRouter.post("/:id/run", async (req, res) => {
 });
 
 testCasesRouter.post("/:id/stop", async (req, res) => {
+  const ids = parseIds(req.params.id);
   try {
-    const result = await stopTestCaseRun(req.params.id);
+    const result = ids.length === 1 ? await stopTestCaseRun(ids[0]) : await stopTestCases(ids);
     res.json(result);
   } catch (error) {
     res.status(404).json({ message: error instanceof Error ? error.message : "用例不存在" });

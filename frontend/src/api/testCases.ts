@@ -1,5 +1,6 @@
 import { request } from "./client";
 import type {
+  BatchStopRunResult,
   LatestRunDetail,
   TestCaseLogDetail,
   TestCaseLogHistory,
@@ -59,6 +60,12 @@ export function runTestCase(id: string) {
 
 export function stopTestCase(id: string) {
   return request<StopRunResult>(`/test-cases/${id}/stop`, {
+    method: "POST",
+  });
+}
+
+export function stopTestCases(ids: string[]) {
+  return request<BatchStopRunResult>(`/test-cases/${ids.join(",")}/stop`, {
     method: "POST",
   });
 }

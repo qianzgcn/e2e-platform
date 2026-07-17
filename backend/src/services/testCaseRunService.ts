@@ -265,6 +265,33 @@ function dispatchTasks(tasks: RunTask[], project: ProjectConfig) {
   }
 }
 
+// 批量停止：逐条调用 stopTestCaseRun，单条失败不阻断其他用例，聚合成功数和失败数。
+export async function stopTestCases(testCaseIds: string[]) {
+  logRun("收到批量停止请求", { testCaseIds });
+  const results = await Promise.allSettled(
+    testCaseIds.map((id) => stopTestCaseRun(id)),
+  );
+
+  let successCount = 0;
+  let failedCount = 0;
+
+  for (let index = 0; index < results.length; index += 1) {
+    const result = results[index];
+    if (result.status === "fulfilled") {
+      successCount += 1;
+    } else {
+      failedCount += 1;
+      logRun("批量停止单条失败", {
+        testCaseId: testCaseIds[index],
+        message: result.reason instanceof Error ? result.reason.message : "未知错误",
+      });
+    }
+  }
+
+  logRun("批量停止完成", { successCount, failedCount });
+  return { successCount, failedCount };
+}
+
 // 停止当前活跃运行：排队态移出内存队列，生成态终止该用例的 Claude 生成，运行态终止 Playwright。
 export async function stopTestCaseRun(testCaseId: string): Promise<StopRunResult> {
   logRun("收到停止用例请求", { testCaseId });

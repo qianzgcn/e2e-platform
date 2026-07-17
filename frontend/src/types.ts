@@ -209,3 +209,8 @@ export type StopRunResult = {
   stopped: boolean;
   affectedTestCaseIds: string[];
 };
+
+export type BatchStopRunResult = {
+  successCount: number;
+  failedCount: number;
+};
